@@ -9,7 +9,15 @@
 //
 // Expects a NIM (or any OpenAI-chat-compatible server) at NIM_URL below.
 //
-// Usage: node llm-bot.mjs <name> [w|b|either]
+// Usage:
+//   node llm-bot.mjs <name> [w|b|either]                 find a random opponent
+//   node llm-bot.mjs <name> <room-id-or-invite-link>      join a specific room
+//                                                           directly (paste the
+//                                                           whole invite link or
+//                                                           just its room id) -
+//                                                           you'll join as black,
+//                                                           same as any human
+//                                                           joining that link
 
 import { initialState, legalMoves, applyMove, toSAN } from "../rules.js";
 
@@ -19,7 +27,10 @@ const NIM_URL = process.env.NIM_URL ?? "http://localhost:8000/v1/chat/completion
 const NIM_MODEL = process.env.NIM_MODEL ?? "google/gemma-3-1b-it";
 
 const name = process.argv[2] ?? `LLMBot${Math.floor(Math.random() * 9000 + 1000)}`;
-const wantsColor = process.argv[3] ?? "either";
+const arg = process.argv[3] ?? "either";
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const joinGameId = arg.match(UUID_RE)?.[0] ?? null;
+const wantsColor = joinGameId ? null : arg;
 
 async function api(path, { method = "GET", body } = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -81,28 +92,38 @@ async function main() {
   console.log(`[${name}] registering...`);
   const [reg] = await rpc("register_player", { p_name: name });
   const apiKey = reg.api_key;
-  console.log(`[${name}] registered, rating ${reg.rating}. Looking for an opponent (wants: ${wantsColor})...`);
+  console.log(`[${name}] registered, rating ${reg.rating}.`);
 
-  let match = (await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor }))[0];
   let gameId, myColor, myToken;
 
-  if (match.matched) {
-    ({ game_id: gameId, color: myColor } = match);
-    console.log(`[${name}] matched instantly as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-    const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
-    myToken = myColor === "w" ? game.white_token : game.black_token;
+  if (joinGameId) {
+    console.log(`[${name}] joining room ${joinGameId} directly...`);
+    const [joined] = await rpc("join_room_as_player", { p_game_id: joinGameId, p_api_key: apiKey });
+    if (!joined.joined) throw new Error("Could not join that room - it's already full, or doesn't exist.");
+    gameId = joinGameId; myColor = joined.color; myToken = joined.token;
+    console.log(`[${name}] joined as ${myColor === "w" ? "white" : "black"}`);
   } else {
-    console.log(`[${name}] waiting for an opponent (lobby id ${match.lobby_id})...`);
-    while (true) {
-      await sleep(1000);
-      const [row] = await api(`lobby?id=eq.${match.lobby_id}&select=status,matched_game_id,matched_color`);
-      if (row.status === "matched") {
-        gameId = row.matched_game_id;
-        myColor = row.matched_color;
-        console.log(`[${name}] matched as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-        const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
-        myToken = myColor === "w" ? game.white_token : game.black_token;
-        break;
+    console.log(`[${name}] looking for an opponent (wants: ${wantsColor})...`);
+    let match = (await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor }))[0];
+
+    if (match.matched) {
+      ({ game_id: gameId, color: myColor } = match);
+      console.log(`[${name}] matched instantly as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
+      const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
+      myToken = myColor === "w" ? game.white_token : game.black_token;
+    } else {
+      console.log(`[${name}] waiting for an opponent (lobby id ${match.lobby_id})...`);
+      while (true) {
+        await sleep(1000);
+        const [row] = await api(`lobby?id=eq.${match.lobby_id}&select=status,matched_game_id,matched_color`);
+        if (row.status === "matched") {
+          gameId = row.matched_game_id;
+          myColor = row.matched_color;
+          console.log(`[${name}] matched as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
+          const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
+          myToken = myColor === "w" ? game.white_token : game.black_token;
+          break;
+        }
       }
     }
   }
