@@ -99,6 +99,34 @@ export async function fetchLeaderboard(limit = 50) {
   return data;
 }
 
+// A registered identity, stored in the browser like the nickname is - but
+// this one is tied to a real account server-side (a `players` row) with a
+// secret api_key, and games you play while registered count toward a
+// real Elo rating (see 008_players_elo.sql). Purely opt-in: createRoom/
+// joinRoom/enterLobby below all fall back to the plain anonymous flow
+// when nothing is registered, unchanged from before this existed.
+const PLAYER_KEY = "chess-online:player"; // { name, apiKey }
+export function getStoredPlayer() {
+  const raw = localStorage.getItem(PLAYER_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+export async function registerAsPlayer(name) {
+  const { data, error } = await supabase.rpc("register_player", { p_name: name });
+  if (error) throw error;
+  const [reg] = data;
+  const player = { name: reg.name, apiKey: reg.api_key };
+  localStorage.setItem(PLAYER_KEY, JSON.stringify(player));
+  setNickname(reg.name); // keep the two names in sync - no reason to diverge
+  return { ...player, rating: reg.rating };
+}
+export async function fetchMyPlayerStats() {
+  const player = getStoredPlayer();
+  if (!player) return null;
+  const { data, error } = await supabase.rpc("my_player_stats", { p_api_key: player.apiKey });
+  if (error) throw error;
+  return data[0] ?? null;
+}
+
 // Creates a new room, seeded with the standard starting position. The
 // creator is always white. Returns the token their browser should keep
 // (e.g. in localStorage) to prove they're allowed to move white's pieces.
@@ -108,6 +136,15 @@ export async function fetchLeaderboard(limit = 50) {
 // actually joins (see joinRoom), so nobody's time ticks away while waiting
 // alone in an empty room.
 export async function createRoom(nickname, timeLimitSeconds = 180) {
+  const player = getStoredPlayer();
+  if (player) {
+    const { data, error } = await supabase.rpc("create_room_as_player", { p_api_key: player.apiKey, p_time_limit_seconds: timeLimitSeconds });
+    if (error) throw error;
+    const [row] = data;
+    logEvent("room_created", row.game_id);
+    return { gameId: row.game_id, color: row.color, token: row.token };
+  }
+
   const insert = { state: initialState(), white_nickname: nickname, time_limit_seconds: timeLimitSeconds };
   if (timeLimitSeconds != null) {
     insert.white_time_remaining_ms = timeLimitSeconds * 1000;
@@ -126,6 +163,19 @@ export async function createRoom(nickname, timeLimitSeconds = 180) {
 // white's clock genuinely starts (turn_started_at = now), not whenever the
 // room happened to be created.
 export async function joinRoom(gameId, nickname) {
+  const player = getStoredPlayer();
+  if (player) {
+    const { data, error } = await supabase.rpc("join_room_as_player", { p_game_id: gameId, p_api_key: player.apiKey });
+    if (error) throw error;
+    const [row] = data;
+    if (!row.joined) {
+      const { data: existing } = await supabase.from("games").select("id").eq("id", gameId).maybeSingle();
+      return { joined: false, reason: existing ? "full" : "not_found" };
+    }
+    logEvent("player_joined", gameId);
+    return { joined: true, gameId, color: row.color, token: row.token };
+  }
+
   const token = randomToken();
   const { data, error } = await supabase
     .from("games")
@@ -150,7 +200,10 @@ export async function joinRoom(gameId, nickname) {
 // pairing logic - this just calls it.
 export async function enterLobby(nickname, wantsColor) {
   const token = randomToken();
-  const { data, error } = await supabase.rpc("match_lobby", { p_nickname: nickname, p_wants_color: wantsColor, p_token: token });
+  const player = getStoredPlayer();
+  const { data, error } = player
+    ? await supabase.rpc("match_lobby_as_player", { p_api_key: player.apiKey, p_wants_color: wantsColor, p_token: token })
+    : await supabase.rpc("match_lobby", { p_nickname: nickname, p_wants_color: wantsColor, p_token: token });
   if (error) throw error;
   const row = data[0];
   logEvent("lobby_entered");

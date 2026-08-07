@@ -104,15 +104,14 @@ async function main() {
     console.log(`[${name}] joined as ${myColor === "w" ? "white" : "black"}`);
   } else {
     console.log(`[${name}] looking for an opponent (wants: ${wantsColor})...`);
-    let match = (await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor }))[0];
+    const [match] = await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor });
 
     if (match.matched) {
-      ({ game_id: gameId, color: myColor } = match);
+      ({ game_id: gameId, color: myColor, token: myToken } = match);
       console.log(`[${name}] matched instantly as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-      const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
-      myToken = myColor === "w" ? game.white_token : game.black_token;
     } else {
       console.log(`[${name}] waiting for an opponent (lobby id ${match.lobby_id})...`);
+      myToken = match.token;
       while (true) {
         await sleep(1000);
         const [row] = await api(`lobby?id=eq.${match.lobby_id}&select=status,matched_game_id,matched_color`);
@@ -120,8 +119,6 @@ async function main() {
           gameId = row.matched_game_id;
           myColor = row.matched_color;
           console.log(`[${name}] matched as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-          const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
-          myToken = myColor === "w" ? game.white_token : game.black_token;
           break;
         }
       }

@@ -8,7 +8,15 @@
 // ../rules.js - the actual chess engine - since it has zero dependencies
 // of its own and there's no reason to reimplement move generation.
 //
-// Usage: node random-bot.mjs <name> [w|b|either]
+// Usage:
+//   node random-bot.mjs <name> [w|b|either]                 find a random opponent
+//   node random-bot.mjs <name> <room-id-or-invite-link>      join a specific room
+//                                                              directly (paste the
+//                                                              whole invite link or
+//                                                              just its room id) -
+//                                                              you'll join as black,
+//                                                              same as any human
+//                                                              joining that link
 
 import { initialState, legalMoves, applyMove } from "../rules.js";
 
@@ -16,7 +24,10 @@ const SUPABASE_URL = "https://ulewbiwfvvhigxpuvqss.supabase.co";
 const SUPABASE_KEY = "sb_publishable_rAM-oAxs-_XOp7_OaKHKFA_1axig43n";
 
 const name = process.argv[2] ?? `Bot${Math.floor(Math.random() * 9000 + 1000)}`;
-const wantsColor = process.argv[3] ?? "either";
+const arg = process.argv[3] ?? "either";
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const joinGameId = arg.match(UUID_RE)?.[0] ?? null;
+const wantsColor = joinGameId ? null : arg;
 
 async function api(path, { method = "GET", body } = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -53,34 +64,37 @@ async function main() {
   console.log(`[${name}] registering...`);
   const [reg] = await rpc("register_player", { p_name: name });
   const apiKey = reg.api_key;
-  console.log(`[${name}] registered, rating ${reg.rating}. Looking for an opponent (wants: ${wantsColor})...`);
+  console.log(`[${name}] registered, rating ${reg.rating}.`);
 
-  let match = (await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor }))[0];
   let gameId, myColor, myToken;
 
-  if (match.matched) {
-    ({ game_id: gameId, color: myColor } = match);
-    console.log(`[${name}] matched instantly as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-    // We matched an already-waiting opponent, so OUR token is whatever we
-    // generated - but match_lobby_as_player doesn't hand it back (it's
-    // stored server-side against the game row via the api-key-verified
-    // insert). Fetch our own token from the game row via player_id match.
-    const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token,white_player_id`);
-    myToken = myColor === "w" ? game.white_token : game.black_token;
+  if (joinGameId) {
+    console.log(`[${name}] joining room ${joinGameId} directly...`);
+    const [joined] = await rpc("join_room_as_player", { p_game_id: joinGameId, p_api_key: apiKey });
+    if (!joined.joined) throw new Error("Could not join that room - it's already full, or doesn't exist.");
+    gameId = joinGameId; myColor = joined.color; myToken = joined.token;
+    console.log(`[${name}] joined as ${myColor === "w" ? "white" : "black"}`);
   } else {
-    console.log(`[${name}] waiting for an opponent (lobby id ${match.lobby_id})...`);
-    // Poll our own lobby row rather than using Realtime (WebSocket support
-    // varies by runtime/language - polling works everywhere).
-    while (true) {
-      await sleep(1000);
-      const [row] = await api(`lobby?id=eq.${match.lobby_id}&select=status,matched_game_id,matched_color`);
-      if (row.status === "matched") {
-        gameId = row.matched_game_id;
-        myColor = row.matched_color;
-        console.log(`[${name}] matched as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
-        const [game] = await api(`games?id=eq.${gameId}&select=white_token,black_token`);
-        myToken = myColor === "w" ? game.white_token : game.black_token;
-        break;
+    console.log(`[${name}] looking for an opponent (wants: ${wantsColor})...`);
+    const [match] = await rpc("match_lobby_as_player", { p_api_key: apiKey, p_wants_color: wantsColor });
+
+    if (match.matched) {
+      ({ game_id: gameId, color: myColor, token: myToken } = match);
+      console.log(`[${name}] matched instantly as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
+    } else {
+      console.log(`[${name}] waiting for an opponent (lobby id ${match.lobby_id})...`);
+      myToken = match.token;
+      // Poll our own lobby row rather than using Realtime (WebSocket support
+      // varies by runtime/language - polling works everywhere).
+      while (true) {
+        await sleep(1000);
+        const [row] = await api(`lobby?id=eq.${match.lobby_id}&select=status,matched_game_id,matched_color`);
+        if (row.status === "matched") {
+          gameId = row.matched_game_id;
+          myColor = row.matched_color;
+          console.log(`[${name}] matched as ${myColor === "w" ? "white" : "black"} in game ${gameId}`);
+          break;
+        }
       }
     }
   }
