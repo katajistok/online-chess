@@ -48,11 +48,15 @@ export async function logEvent(eventType, gameId = null) {
 }
 
 // "players" is an estimate, not a precise headcount: 2 for every game in
-// progress, 1 for every room waiting on a second player.
+// progress, 1 for every room waiting on a second player. Only counts games
+// updated in the last 30 minutes - there's no "both players left" detection,
+// so without this an abandoned game would count as "in progress" forever.
+const STALE_AFTER_MS = 30 * 60 * 1000;
 export async function fetchStats() {
+  const cutoff = new Date(Date.now() - STALE_AFTER_MS).toISOString();
   const [{ count: active }, { count: waiting }] = await Promise.all([
-    supabase.from("games").select("id", { count: "exact", head: true }).eq("status", "active"),
-    supabase.from("games").select("id", { count: "exact", head: true }).eq("status", "waiting"),
+    supabase.from("games").select("id", { count: "exact", head: true }).eq("status", "active").gte("updated_at", cutoff),
+    supabase.from("games").select("id", { count: "exact", head: true }).eq("status", "waiting").gte("updated_at", cutoff),
   ]);
   return {
     gamesOngoing: (active ?? 0) + (waiting ?? 0),
