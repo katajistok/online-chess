@@ -28,6 +28,8 @@ input[type=text]{width:100%;background:#20261F;border:1px solid #3C4A3D;color:#E
 a.btn{display:block;text-align:center;text-decoration:none}
 .searching{font-size:13px;color:#9FAE9B;font-style:italic;text-align:center;margin-top:10px}
 .note{margin-top:6px;font-size:12px;color:#9FAE9B;text-align:center}
+.note a{color:#D6B25E}
+.key-box{font-family:monospace;font-size:12px;background:#20261F;border:1px solid #3C4A3D;border-radius:3px;padding:8px;word-break:break-all;user-select:all;margin-top:8px}
 .lb-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #3C4A3D;font-family:monospace;font-size:14px}
 .lb-row:last-child{border-bottom:none}
 .lb-rank{color:#9FAE9B;width:20px;flex:0 0 auto}
@@ -49,9 +51,16 @@ a.btn{display:block;text-align:center;text-decoration:none}
       <input type="text" id="nickname" maxlength="24"/>
       <div id="register-section">
         <button class="btn" id="register-btn" style="margin-top:10px;width:100%">Register for a rating →</button>
+        <div class="note">Played before on another device? <a href="#" id="show-signin-link">Sign in with your key</a></div>
+        <div id="signin-box" style="display:none">
+          <input type="text" id="signin-key" placeholder="Paste your key" style="margin-top:8px"/>
+          <button class="btn" id="signin-btn" style="margin-top:6px;width:100%">Sign in</button>
+        </div>
       </div>
       <div id="registered-section" style="display:none">
         <div class="note" id="registered-text" style="margin-top:8px"></div>
+        <div class="note">Playing on another device? <a href="#" id="show-key-link">Show my key</a> to sign in there.</div>
+        <div id="key-box" class="key-box" style="display:none"></div>
       </div>
     </div>
 
@@ -87,7 +96,7 @@ a.btn{display:block;text-align:center;text-decoration:none}
   </div>
 
 <script type="module">
-import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom, fetchLeaderboard, getStoredPlayer, registerAsPlayer, fetchMyPlayerStats } from "./supabase-client.js";
+import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom, fetchLeaderboard, getStoredPlayer, registerAsPlayer, fetchMyPlayerStats, signInWithKey } from "./supabase-client.js";
 
 subscribeStats((stats) => {
   document.getElementById("stat-games").textContent = stats.gamesOngoing;
@@ -112,6 +121,8 @@ nickInput.addEventListener("change", () => setNickname(nickInput.value.trim() ||
 
 async function renderPlayerCard() {
   const player = getStoredPlayer();
+  document.getElementById("key-box").style.display = "none";
+  document.getElementById("signin-box").style.display = "none";
   if (!player) {
     nickInput.disabled = false;
     document.getElementById("register-section").style.display = "";
@@ -145,6 +156,35 @@ document.getElementById("register-btn").onclick = async () => {
     alert(e.message || "Couldn't register — that name might already be taken.");
     btn.disabled = false;
   }
+};
+
+document.getElementById("show-signin-link").onclick = (e) => {
+  e.preventDefault();
+  document.getElementById("signin-box").style.display = "";
+};
+
+document.getElementById("signin-btn").onclick = async () => {
+  const key = document.getElementById("signin-key").value.trim();
+  if (!key) return;
+  const btn = document.getElementById("signin-btn");
+  btn.disabled = true;
+  try {
+    await signInWithKey(key);
+    nickInput.value = getNickname();
+    await renderPlayerCard();
+  } catch (e) {
+    alert(e.message || "That key didn't work.");
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+document.getElementById("show-key-link").onclick = (e) => {
+  e.preventDefault();
+  const player = getStoredPlayer();
+  const box = document.getElementById("key-box");
+  box.textContent = player.apiKey;
+  box.style.display = "";
 };
 
 let wantsColor = "either";

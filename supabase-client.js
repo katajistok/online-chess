@@ -119,6 +119,21 @@ export async function registerAsPlayer(name) {
   setNickname(reg.name); // keep the two names in sync - no reason to diverge
   return { ...player, rating: reg.rating };
 }
+// Picks up an existing identity on a new browser/device - the api_key
+// (from a previous registration, saved by the player themselves) IS the
+// login, there's no separate password. Verifies it's real before storing
+// it locally, so a typo doesn't silently "sign in" as nobody.
+export async function signInWithKey(apiKey) {
+  const { data, error } = await supabase.rpc("my_player_stats", { p_api_key: apiKey });
+  if (error) throw error;
+  const stats = data[0];
+  if (!stats) throw new Error("That key doesn't match any registered player.");
+  const player = { name: stats.name, apiKey };
+  localStorage.setItem(PLAYER_KEY, JSON.stringify(player));
+  setNickname(stats.name);
+  return player;
+}
+
 export async function fetchMyPlayerStats() {
   const player = getStoredPlayer();
   if (!player) return null;
