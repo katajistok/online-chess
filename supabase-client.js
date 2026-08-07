@@ -91,6 +91,14 @@ export function setNickname(nick) {
   localStorage.setItem(NICK_KEY, nick);
 }
 
+// Rated players only (see supabase/008_players_elo.sql) - anonymous/casual
+// play never appears here. Sorted highest rating first.
+export async function fetchLeaderboard(limit = 50) {
+  const { data, error } = await supabase.rpc("leaderboard", { p_limit: limit });
+  if (error) throw error;
+  return data;
+}
+
 // Creates a new room, seeded with the standard starting position. The
 // creator is always white. Returns the token their browser should keep
 // (e.g. in localStorage) to prove they're allowed to move white's pieces.

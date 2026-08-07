@@ -28,6 +28,11 @@ input[type=text]{width:100%;background:#20261F;border:1px solid #3C4A3D;color:#E
 a.btn{display:block;text-align:center;text-decoration:none}
 .searching{font-size:13px;color:#9FAE9B;font-style:italic;text-align:center;margin-top:10px}
 .note{margin-top:6px;font-size:12px;color:#9FAE9B;text-align:center}
+.lb-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #3C4A3D;font-family:monospace;font-size:14px}
+.lb-row:last-child{border-bottom:none}
+.lb-rank{color:#9FAE9B;width:20px;flex:0 0 auto}
+.lb-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px}
+.lb-rating{color:#D6B25E}
 </style>
 </head>
 <body>
@@ -55,6 +60,12 @@ a.btn{display:block;text-align:center;text-decoration:none}
       <div class="searching" id="searching" style="display:none">Searching for an opponent…</div>
     </div>
 
+    <div class="card" id="leaderboard-card" style="display:none">
+      <h3>Top players</h3>
+      <div id="leaderboard-list"></div>
+      <div class="note"><a href="leaderboard.html" style="color:#D6B25E">Full leaderboard →</a></div>
+    </div>
+
     <div class="card">
       <h3>Play a friend</h3>
       <div class="row" id="time-btns">
@@ -70,12 +81,24 @@ a.btn{display:block;text-align:center;text-decoration:none}
   </div>
 
 <script type="module">
-import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom } from "./supabase-client.js";
+import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom, fetchLeaderboard } from "./supabase-client.js";
 
 subscribeStats((stats) => {
   document.getElementById("stat-games").textContent = stats.gamesOngoing;
   document.getElementById("stat-players").textContent = stats.playersEstimate;
 });
+
+fetchLeaderboard(5).then((top) => {
+  if (!top.length) return; // nobody rated yet - leave the card hidden
+  document.getElementById("leaderboard-list").innerHTML = top
+    .map((p, i) => `<div class="lb-row"><span class="lb-rank">${i + 1}.</span><span class="lb-name">${escapeHtml(p.name)}</span><span class="lb-rating">${Math.round(p.rating)}</span></div>`)
+    .join("");
+  document.getElementById("leaderboard-card").style.display = "";
+}).catch((e) => console.error("Failed to load leaderboard:", e));
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
 const nickInput = document.getElementById("nickname");
 nickInput.value = getNickname();
