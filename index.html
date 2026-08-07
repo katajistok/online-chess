@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Online Chess</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#232B24;color:#E9E4D4;font-family:Georgia,'Times New Roman',serif;min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;text-align:center}
+h1{font-size:32px;font-weight:normal;letter-spacing:.5px;margin-bottom:6px}
+.sub{font-size:13px;color:#9FAE9B;font-family:monospace;margin-bottom:28px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
+.stat{background:#2B342C;border:1px solid #3C4A3D;border-radius:4px;padding:16px 22px;min-width:150px}
+.stat .n{font-size:30px;color:#D6B25E;font-family:monospace}
+.stat .l{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#9FAE9B;font-family:monospace;margin-top:4px}
+.note{margin-top:30px;font-size:13px;color:#9FAE9B}
+</style>
+</head>
+<body>
+  <h1>Online Chess</h1>
+  <div class="sub">live status</div>
+  <div class="stats">
+    <div class="stat"><div class="n" id="stat-games">–</div><div class="l">games in progress</div></div>
+    <div class="stat"><div class="n" id="stat-players">–</div><div class="l">players active</div></div>
+  </div>
+  <div class="note">Multiplayer game UI is still being built — check back soon.</div>
+
+<script type="module">
+import { subscribeStats } from "./supabase-client.js";
+
+subscribeStats((stats) => {
+  document.getElementById("stat-games").textContent = stats.gamesOngoing;
+  document.getElementById("stat-players").textContent = stats.playersEstimate;
+});
+</script>
+</body>
+</html>
