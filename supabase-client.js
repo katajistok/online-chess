@@ -88,6 +88,14 @@ export async function getGame(gameId) {
   return data;
 }
 
+// Full ordered move history for a room - used to replay a game from scratch
+// on initial load, on reconnect, or to catch up after a missed realtime event.
+export async function getMoves(gameId) {
+  const { data, error } = await supabase.from("moves").select("*").eq("game_id", gameId).order("ply", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
 // Pushes a move: the caller has already validated it and computed the new
 // state via rules.js (this file has no chess knowledge). `token` must match
 // the games.<color>_token column server-side or the update silently matches

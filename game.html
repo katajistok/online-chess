@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Online Chess</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#232B24;color:#E9E4D4;font-family:Georgia,'Times New Roman',serif;min-height:100vh;padding:24px 16px}
+.wrap{max-width:980px;margin:0 auto}
+header{display:flex;align-items:baseline;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
+.sub{font-size:13px;color:#9FAE9B;font-family:monospace}
+.main{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+.boardcol{flex:0 0 auto}
+.boardwrap{position:relative;width:min(88vw,496px)}
+.board{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);aspect-ratio:1;
+  box-shadow:0 0 0 6px #3A4A3C,0 0 0 7px #1A201B,0 14px 30px rgba(0,0,0,.45);user-select:none}
+.sq{position:relative;cursor:pointer}
+.sq.light{background:#EDE3CB}.sq.dark{background:#5F7E5B}
+.sq.lastmove::after{content:"";position:absolute;inset:0;background:rgba(214,178,94,.38)}
+.sq.selected::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 3px #D6B25E}
+.sq.check{background:radial-gradient(circle,#B5483A 35%,transparent 75%)}
+.dot{position:absolute;left:37%;top:37%;width:26%;height:26%;border-radius:50%;background:rgba(32,38,30,.35);z-index:3;pointer-events:none}
+.dot.cap{left:7%;top:7%;width:86%;height:86%;background:transparent;border:4px solid rgba(32,38,30,.35)}
+.coord{position:absolute;font-size:11px;font-family:monospace;opacity:.75}
+.coord.file{right:3px;bottom:2px}.coord.rank{left:3px;top:2px}
+.sq.light .coord{color:#5F7E5B}.sq.dark .coord{color:#EDE3CB}
+
+.sprites{position:absolute;inset:0;pointer-events:none}
+.pc{position:absolute;width:12.5%;height:12.5%;display:flex;align-items:center;justify-content:center;
+  transition:left .48s cubic-bezier(.45,.05,.55,.95),top .48s cubic-bezier(.45,.05,.55,.95);z-index:5}
+.pc.moving{z-index:7}
+.glyph{font-size:min(8.2vw,46px);line-height:1;display:inline-block;transform-origin:50% 90%}
+.pc.w .glyph{color:#FBF7EC;text-shadow:0 1px 0 #5A5340,0 0 2px #463F2E}
+.pc.b .glyph{color:#20231E;text-shadow:0 1px 0 rgba(255,255,255,.18)}
+.pc.moving .glyph{animation:walk .48s ease-in-out}
+@keyframes walk{0%{transform:translateY(0) rotate(0deg)}20%{transform:translateY(-14%) rotate(-4deg)}
+  40%{transform:translateY(0) rotate(0deg)}60%{transform:translateY(-14%) rotate(4deg)}
+  85%{transform:translateY(0)}100%{transform:translateY(0)}}
+.pc.dying{z-index:6}
+.pc.dying .glyph{animation:die .62s ease-in forwards}
+@keyframes die{0%{transform:rotate(0) translateY(0);opacity:1}25%{transform:rotate(-12deg) translateY(-6%);opacity:1}
+  100%{transform:rotate(86deg) translateY(34%) scale(.92);opacity:0}}
+.clash{position:absolute;width:12.5%;height:12.5%;display:flex;align-items:center;justify-content:center;z-index:8;pointer-events:none}
+.clash span{font-size:min(7vw,38px);animation:clashfx .48s ease-out forwards;filter:drop-shadow(0 0 6px #F3D98B)}
+@keyframes clashfx{0%{transform:scale(.3) rotate(-20deg);opacity:0}30%{transform:scale(1.35) rotate(8deg);opacity:1}100%{transform:scale(1);opacity:0}}
+
+.panel{flex:1 1 280px;min-width:270px;display:flex;flex-direction:column;gap:14px}
+.card{background:#2B342C;border:1px solid #3C4A3D;border-radius:4px;padding:12px 14px}
+.card h3{margin:0 0 8px;font-size:12px;font-weight:normal;letter-spacing:2px;text-transform:uppercase;color:#9FAE9B;font-family:monospace}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{background:#3C4A3D;color:#E9E4D4;border:1px solid #55665A;border-radius:3px;padding:7px 14px;font-family:inherit;font-size:14px;cursor:pointer}
+.btn:hover{background:#48584A}.btn:disabled{opacity:.4;cursor:default}
+.status-bar{font-size:15px;min-height:22px;margin-bottom:4px}
+.result{color:#D6B25E}.thinking{color:#9FAE9B;font-style:italic}
+.sheet{background:#F4EEDC;color:#33372E;border-radius:3px;padding:10px 12px;font-family:monospace;font-size:13px;max-height:300px;overflow-y:auto;box-shadow:inset 0 0 12px rgba(120,110,70,.18)}
+.sheet table{width:100%;border-collapse:collapse}
+.sheet td{padding:3px 6px;border-bottom:1px solid #D9D0B4}
+.sheet td.num{width:34px;color:#8A8468;text-align:right}
+.sheet td.mv{width:42%}
+.sheet .empty{color:#8A8468;font-style:italic;padding:6px 4px}
+.captured{font-size:22px;min-height:28px;letter-spacing:2px}
+.overlay{position:absolute;inset:0;background:rgba(20,25,20,.72);z-index:10;display:flex;align-items:center;justify-content:center}
+.promo{background:#F4EEDC;border-radius:6px;padding:14px 18px;display:flex;gap:10px}
+.promo button{font-size:40px;background:#EDE3CB;border:1px solid #B8AE8C;border-radius:4px;width:64px;height:64px;cursor:pointer;color:#20231E}
+.promo button:hover{background:#D6B25E}
+.invite{font-family:monospace;font-size:12px;background:#20261F;border:1px solid #3C4A3D;border-radius:3px;padding:8px;word-break:break-all;user-select:all}
+.you{font-size:12px;color:#9FAE9B;font-family:monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Online Chess</h1>
+    <span class="sub" id="you-are">connecting…</span>
+  </header>
+  <div class="main">
+    <div class="boardcol">
+      <div class="status-bar" id="status"></div>
+      <div class="captured" id="cap-top"></div>
+      <div class="boardwrap">
+        <div class="board" id="board"></div>
+        <div class="sprites" id="sprites"></div>
+        <div class="overlay" id="promo-overlay" style="display:none">
+          <div class="promo" id="promo-btns"></div>
+        </div>
+      </div>
+      <div class="captured" id="cap-bot"></div>
+    </div>
+    <div class="panel">
+      <div class="card" id="invite-card" style="display:none">
+        <h3>Invite a friend</h3>
+        <div class="invite" id="invite-link"></div>
+      </div>
+      <div class="card">
+        <h3>Game</h3>
+        <div class="row">
+          <a class="btn" href="game.html">New room</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Scoresheet</h3>
+        <div class="sheet" id="sheet"><div class="empty">No moves yet — white to play.</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { legalMoves, applyMove, gameStatus, toSAN, rowOf, colOf, findKing, inCheck, initialState } from "./rules.js";
+import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame } from "./supabase-client.js";
+
+// ═══════════════════════════════════════════════════════
+//  ROOM / IDENTITY
+// ═══════════════════════════════════════════════════════
+let roomId = new URLSearchParams(location.search).get("room");
+let myColor = null;   // 'w' | 'b' | null (spectator)
+let myToken = null;
+let gameRow = null;   // last known `games` row (status, result, tokens, etc.)
+
+function storageKey(id) { return `chess-online:${id}`; }
+
+async function bootstrap() {
+  if (!roomId) {
+    const room = await createRoom();
+    roomId = room.gameId; myColor = "w"; myToken = room.token;
+    localStorage.setItem(storageKey(roomId), JSON.stringify({ color: myColor, token: myToken }));
+    window.history.replaceState(null, "", `?room=${roomId}`);
+  } else {
+    const saved = localStorage.getItem(storageKey(roomId));
+    if (saved) {
+      ({ color: myColor, token: myToken } = JSON.parse(saved));
+    } else {
+      const result = await joinRoom(roomId);
+      if (result.joined) {
+        myColor = result.color; myToken = result.token;
+        localStorage.setItem(storageKey(roomId), JSON.stringify({ color: myColor, token: myToken }));
+      } else if (result.reason === "full") {
+        myColor = null; // spectator
+      } else {
+        document.getElementById("you-are").textContent = "room not found";
+        document.getElementById("status").innerHTML = '<span class="result">This game doesn\'t exist (bad link, or it was deleted).</span>';
+        return;
+      }
+    }
+  }
+
+  document.getElementById("you-are").textContent =
+    myColor === "w" ? "you are white" : myColor === "b" ? "you are black" : "spectating";
+
+  await syncFromServer();
+  subscribeGame(roomId, onGameRowChange, onMoveInserted);
+}
+
+function updateInviteUI() {
+  const card = document.getElementById("invite-card");
+  if (myColor === "w" && gameRow && !gameRow.black_token) {
+    card.style.display = "";
+    document.getElementById("invite-link").textContent = location.href;
+  } else {
+    card.style.display = "none";
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  LOCAL GAME STATE (mirrors chess.html, driven by server moves)
+// ═══════════════════════════════════════════════════════
+const GLYPH = { wK: "♔", wQ: "♕", wR: "♖", wB: "♗", wN: "♘", wP: "♙", bK: "♚", bQ: "♛", bR: "♜", bB: "♝", bN: "♞", bP: "♟" };
+let pcId = 0;
+function initialPieces() {
+  const st = initialState(), list = [];
+  for (let i = 0; i < 64; i++) if (st.board[i]) list.push({ id: "pc" + pcId++, code: st.board[i], sq: i, dying: false });
+  return list;
+}
+
+let history = [initialState()];
+let moveLog = [];
+let sanLog = [];
+let pieces = initialPieces();
+let lastMove = null;
+let selected = -1;
+let animating = false;
+
+function state() { return history[history.length - 1]; }
+function reps() { const k = posKey(state()); return history.filter((s) => posKey(s) === k).length; }
+function posKey(s) { return s.board.map((p) => p || ".").join("") + s.turn + (s.castling.wK ? "K" : "") + (s.castling.wQ ? "Q" : "") + (s.castling.bK ? "k" : "") + (s.castling.bQ ? "q" : "") + s.ep; }
+function status() { return gameStatus(state(), reps()); }
+function legal() { return status().over ? [] : status().moves; }
+
+// ═══════════════════════════════════════════════════════
+//  SERVER SYNC
+// ═══════════════════════════════════════════════════════
+function rebuildFromMoves(serverMoves) {
+  history = [initialState()]; moveLog = []; sanLog = []; pieces = initialPieces(); lastMove = null;
+  for (const row of serverMoves) {
+    const m = row.move;
+    history.push(applyMove(state(), m));
+    moveLog.push(m); sanLog.push(row.san);
+    applySpriteMove(m);
+    lastMove = { from: m.from, to: m.to };
+  }
+}
+
+async function syncFromServer() {
+  const [game, serverMoves] = await Promise.all([getGame(roomId), getMoves(roomId)]);
+  if (!game) return;
+  gameRow = game;
+
+  if (serverMoves.length === moveLog.length + 1 && !animating) {
+    playMove(serverMoves[serverMoves.length - 1].move, { local: false });
+  } else if (serverMoves.length !== moveLog.length) {
+    rebuildFromMoves(serverMoves);
+    render();
+  } else {
+    render();
+  }
+  updateInviteUI();
+}
+
+// Both handlers just trigger a full resync check rather than trusting a
+// single channel - belt and braces, since `games` UPDATE and `moves` INSERT
+// are two independent realtime subscriptions and either one alone is
+// enough to know something changed.
+function onGameRowChange() { syncFromServer(); }
+function onMoveInserted(row) {
+  if (row.ply <= moveLog.length) return; // echo of our own move, already applied
+  syncFromServer();
+}
+
+async function pushMoveToServer(m) {
+  const san = sanLog[sanLog.length - 1];
+  const stat = gameStatus(state(), reps());
+  try {
+    await sendMove({
+      gameId: roomId, color: myColor, token: myToken,
+      ply: moveLog.length, san, move: m, state: state(),
+      status: stat.over ? "finished" : "active",
+      result: stat.over ? stat.result : undefined,
+    });
+  } catch (e) {
+    console.error("Failed to send move:", e);
+    alert("Couldn't send your move — check your connection and try again.");
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ANIMATION (from simple-chess/chess.html)
+// ═══════════════════════════════════════════════════════
+const WALK = 480, CLASH_AT = 260, DEATH = 620;
+
+function applySpriteMove(m) {
+  const mover = m.piece[0];
+  pieces = pieces.filter((p) => !(m.captured && p.sq === (m.flag === "ep" ? m.to + (mover === "w" ? 8 : -8) : m.to) && p.code[0] !== mover));
+  pieces = pieces.map((p) => {
+    if (p.sq === m.from && p.code[0] === mover) return { ...p, sq: m.to, code: m.promo ? mover + m.promo : p.code };
+    if (m.flag === "castleK") { const h = mover === "w" ? 56 : 0; if (p.sq === h + 7 && p.code[0] === mover) return { ...p, sq: h + 5 }; }
+    if (m.flag === "castleQ") { const h = mover === "w" ? 56 : 0; if (p.sq === h + 0 && p.code[0] === mover) return { ...p, sq: h + 3 }; }
+    return p;
+  });
+}
+
+function playMove(m, { local }) {
+  const s = state(), san = toSAN(s, m);
+  sanLog.push(san); moveLog.push(m);
+  history.push(applyMove(s, m));
+  lastMove = { from: m.from, to: m.to };
+  selected = -1; animating = true;
+
+  const mover = m.piece[0];
+  const victimSq = m.flag === "ep" ? m.to + (mover === "w" ? 8 : -8) : m.to;
+
+  pieces = pieces.map((p) => {
+    if (p.sq === m.from && p.code[0] === mover) return { ...p, sq: m.to, code: m.promo ? mover + m.promo : p.code };
+    if (m.flag === "castleK") { const h = mover === "w" ? 56 : 0; if (p.sq === h + 7 && p.code[0] === mover) return { ...p, sq: h + 5 }; }
+    if (m.flag === "castleQ") { const h = mover === "w" ? 56 : 0; if (p.sq === h + 0 && p.code[0] === mover) return { ...p, sq: h + 3 }; }
+    return p;
+  });
+
+  const moverPiece = pieces.find((p) => p.sq === m.to && p.code[0] === mover && !p.dying);
+  if (moverPiece) moverPiece.moving = true;
+
+  render();
+
+  if (m.captured) {
+    setTimeout(() => {
+      showClash(m.to);
+      pieces = pieces.map((p) => (p.sq === victimSq && p.code[0] !== mover ? { ...p, dying: true, moving: false } : p));
+      render();
+    }, CLASH_AT);
+  }
+
+  const total = Math.max(m.captured ? CLASH_AT + DEATH : WALK, WALK) + 60;
+  setTimeout(() => {
+    pieces = pieces.filter((p) => !p.dying).map((p) => ({ ...p, moving: false }));
+    hideClash();
+    animating = false;
+    render();
+    if (local) pushMoveToServer(m);
+  }, total);
+}
+
+function showClash(sq) {
+  const el = document.createElement("div");
+  el.className = "clash"; el.id = "clash";
+  el.style.cssText = sqStyle(sq);
+  el.innerHTML = "<span>⚔</span>";
+  document.getElementById("sprites").appendChild(el);
+}
+function hideClash() { const el = document.getElementById("clash"); if (el) el.remove(); }
+
+// ═══════════════════════════════════════════════════════
+//  RENDER (from simple-chess/chess.html)
+// ═══════════════════════════════════════════════════════
+const flip = () => myColor === "b";
+const dispCol = (sq) => (flip() ? 7 - colOf(sq) : colOf(sq));
+const dispRow = (sq) => (flip() ? 7 - rowOf(sq) : rowOf(sq));
+function sqStyle(sq) { return `left:${dispCol(sq) * 12.5}%;top:${dispRow(sq) * 12.5}%`; }
+
+function render() {
+  renderBoard();
+  renderSprites();
+  renderStatus();
+  renderSheet();
+  renderCaptured();
+}
+
+function renderBoard() {
+  const boardEl = document.getElementById("board");
+  const s = state(), stat = status(), lm = lastMove;
+  const moves = legal();
+  const canInteract = myColor && !animating && !stat.over && s.turn === myColor;
+  const targets = canInteract && selected >= 0 ? moves.filter((m) => m.from === selected) : [];
+  const kingCheck = !stat.over && inCheck(s, s.turn) ? findKing(s.board, s.turn) : -1;
+  const order = flip() ? [...Array(64).keys()].reverse() : [...Array(64).keys()];
+
+  boardEl.innerHTML = "";
+  for (const sq of order) {
+    const r = rowOf(sq), c = colOf(sq), light = (r + c) % 2 === 0;
+    const div = document.createElement("div");
+    div.className = "sq " + (light ? "light" : "dark");
+    if (lm && (lm.from === sq || lm.to === sq)) div.classList.add("lastmove");
+    if (selected === sq) div.classList.add("selected");
+    if (kingCheck === sq) div.classList.add("check");
+
+    const showFile = flip() ? r === 0 : r === 7, showRank = flip() ? c === 7 : c === 0;
+    if (showFile) { const sp = document.createElement("span"); sp.className = "coord file"; sp.textContent = "abcdefgh"[c]; div.appendChild(sp); }
+    if (showRank) { const sp = document.createElement("span"); sp.className = "coord rank"; sp.textContent = 8 - r; div.appendChild(sp); }
+
+    const t = targets.find((m) => m.to === sq);
+    if (t) { const dot = document.createElement("span"); dot.className = "dot" + (s.board[sq] ? " cap" : ""); div.appendChild(dot); }
+
+    div.onclick = () => clickSquare(sq);
+    boardEl.appendChild(div);
+  }
+}
+
+function renderSprites() {
+  const sprEl = document.getElementById("sprites");
+  sprEl.querySelectorAll(".pc").forEach((el) => el.remove());
+  for (const p of pieces) {
+    const div = document.createElement("div");
+    div.className = "pc " + p.code[0] + (p.moving ? " moving" : "") + (p.dying ? " dying" : "");
+    div.id = p.id;
+    div.style.cssText = sqStyle(p.sq);
+    const g = document.createElement("span");
+    g.className = "glyph";
+    g.textContent = GLYPH[p.code];
+    div.appendChild(g);
+    sprEl.appendChild(div);
+  }
+}
+
+function renderStatus() {
+  const s = state(), stat = status();
+  const el = document.getElementById("status");
+  if (stat.over) {
+    const r = stat.result === "1/2-1/2" ? "Draw" : stat.result === "1-0" ? "White wins" : "Black wins";
+    el.innerHTML = `<span class="result">${r} — ${stat.reason}</span>`;
+  } else if (animating) {
+    el.innerHTML = '<span class="thinking">…</span>';
+  } else if (myColor && !gameRow?.black_token) {
+    el.innerHTML = '<span class="thinking">Waiting for an opponent to join — share the invite link.</span>';
+  } else if (!myColor) {
+    el.textContent = (s.turn === "w" ? "White" : "Black") + " to move — spectating";
+  } else if (s.turn !== myColor) {
+    el.innerHTML = '<span class="thinking">Waiting for opponent’s move…</span>';
+  } else {
+    const chk = inCheck(s, s.turn) ? " — check!" : "";
+    el.textContent = "Your move" + chk;
+  }
+}
+
+function renderSheet() {
+  const el = document.getElementById("sheet");
+  if (!sanLog.length) { el.innerHTML = '<div class="empty">No moves yet — white to play.</div>'; return; }
+  let html = "<table>";
+  for (let i = 0; i < sanLog.length; i += 2) {
+    html += `<tr><td class="num">${i / 2 + 1}.</td><td class="mv">${sanLog[i]}</td><td class="mv">${sanLog[i + 1] || ""}</td></tr>`;
+  }
+  el.innerHTML = html + "</table>";
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderCaptured() {
+  const s = state();
+  const start = { P: 8, N: 2, B: 2, R: 2, Q: 1 };
+  const cnt = { w: { ...start }, b: { ...start } };
+  for (const p of s.board) if (p && p[1] !== "K") cnt[p[0]][p[1]]--;
+  const list = (c) => ["Q", "R", "B", "N", "P"].flatMap((t) => Array(Math.max(0, cnt[c][t])).fill(GLYPH[c + t]));
+  const top = flip() ? list("w") : list("b");
+  const bot = flip() ? list("b") : list("w");
+  document.getElementById("cap-top").textContent = top.join(" ");
+  document.getElementById("cap-bot").textContent = bot.join(" ");
+}
+
+// ═══════════════════════════════════════════════════════
+//  INTERACTION
+// ═══════════════════════════════════════════════════════
+function clickSquare(sq) {
+  const s = state(), stat = status();
+  if (!myColor || animating || stat.over || s.turn !== myColor) return;
+  const promoOverlay = document.getElementById("promo-overlay");
+  if (promoOverlay.style.display !== "none") return;
+  if (selected >= 0) {
+    const candidates = legal().filter((m) => m.from === selected && m.to === sq);
+    if (candidates.length) {
+      if (candidates[0].promo) { showPromo(selected, sq); return; }
+      playMove(candidates[0], { local: true }); return;
+    }
+  }
+  const p = s.board[sq];
+  selected = p && p[0] === myColor ? (sq === selected ? -1 : sq) : -1;
+  render();
+}
+
+function showPromo(from, to) {
+  const overlay = document.getElementById("promo-overlay");
+  const btns = document.getElementById("promo-btns");
+  btns.innerHTML = ["Q", "R", "N", "B"].map((t) => `<button data-from="${from}" data-to="${to}" data-type="${t}">${GLYPH[myColor + t]}</button>`).join("");
+  btns.querySelectorAll("button").forEach((b) => (b.onclick = () => choosePromo(+b.dataset.from, +b.dataset.to, b.dataset.type)));
+  overlay.style.display = "flex";
+}
+
+function choosePromo(from, to, type) {
+  document.getElementById("promo-overlay").style.display = "none";
+  const m = legal().find((x) => x.from === from && x.to === to && x.promo === type);
+  if (m) playMove(m, { local: true });
+}
+
+// ═══════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════
+render();
+bootstrap();
+</script>
+</body>
+</html>
