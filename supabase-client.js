@@ -196,44 +196,24 @@ export async function getMoves(gameId) {
   return data;
 }
 
-// Pushes a move: the caller has already validated it and computed the new
-// state via rules.js (this file has no chess knowledge). `token` must match
-// the games.<color>_token column server-side or the update silently matches
-// zero rows and this throws - that's what stops a stale/other-color tab
-// from pushing a move for the wrong side.
-//
-// timeRemainingMs (when the game has a clock) is the mover's own remaining
-// time AFTER this move, computed client-side as
-// (their time before this turn) - (elapsed time they just spent thinking).
-// Banking it here, and resetting turn_started_at, is what makes the clock
-// hand off to the other player.
-export async function sendMove({ gameId, color, token, ply, san, move, state, status, result, timeRemainingMs }) {
-  const tokenColumn = color === "w" ? "white_token" : "black_token";
-  // A move implicitly answers any pending draw offer - either you just
-  // declined it by playing on, or you're the offerer moving anyway, which
-  // withdraws it. Either way it shouldn't linger.
-  const patch = { state, updated_at: new Date().toISOString(), draw_offered_by: null };
-  if (status) patch.status = status;
-  if (result) patch.result = result;
-  if (timeRemainingMs != null) {
-    patch[color === "w" ? "white_time_remaining_ms" : "black_time_remaining_ms"] = Math.max(0, Math.round(timeRemainingMs));
-    patch.turn_started_at = new Date().toISOString();
-  }
+// Submits a move via the submit-move Edge Function, which re-validates it
+// server-side against its own authoritative replay of the game (using the
+// exact same rules.js this file could no longer be trusted to enforce on
+// its own) before accepting it. See supabase/functions/submit-move -
+// clients no longer compute/send the resulting state, SAN, game-over
+// status, or clock deduction themselves; the server derives all of that.
+// `move` just needs { from, to, promo? }.
+export async function sendMove({ gameId, color, token, move }) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/submit-move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gameId, color, token, from: move.from, to: move.to, promo: move.promo }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Move rejected (${res.status})`);
 
-  const { data, error } = await supabase
-    .from("games")
-    .update(patch)
-    .eq("id", gameId)
-    .eq(tokenColumn, token)
-    .select()
-    .single();
-  if (error) throw new Error("Move rejected (wrong token or game not found): " + error.message);
-
-  const { error: moveError } = await supabase.from("moves").insert({ game_id: gameId, ply, san, move });
-  if (moveError) console.warn("Failed to log move to history:", moveError.message);
-
-  logEvent(status === "finished" ? "game_finished" : "move_made", gameId);
-  return data;
+  logEvent(data.game.status === "finished" ? "game_finished" : "move_made", gameId);
+  return data.game;
 }
 
 // Declares a loss by timeout. Any client (whichever notices the deadline

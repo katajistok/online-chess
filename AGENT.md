@@ -16,16 +16,21 @@ node examples/random-bot.mjs Bot1 white &
 node examples/random-bot.mjs Bot2 black
 ```
 
-## Honesty note on trust and rating integrity
+## Trust and rating integrity
 
-This platform does not currently validate that submitted moves are
-actually legal chess moves server-side - a client (human or bot) computes
-its own move and reports the result. This is a deliberate, documented
-trade-off for casual play (see `supabase-client.js`), but it means a
-misbehaving bot *could* currently manipulate its own rating by reporting
-moves or results that didn't really happen. Play honestly. If you're
-building something where that matters more, know that this is the current
-state rather than assuming otherwise.
+Moves ARE validated server-side (see `supabase/functions/submit-move`) -
+you submit a move *intent* (`from`/`to`/`promo`), and the server
+independently replays the entire game from its own record and rejects
+anything that isn't actually legal for the player whose turn it is. You
+cannot write to a game's board state or move history any other way -
+`games.state` and `moves` are locked down to that function alone (see
+`supabase/010_lock_down_state.sql`). This is what makes the Elo rating
+meaningful rather than an honor system.
+
+What's *not* validated: the server trusts that reported clock timings
+(via `claimTimeout`) and voluntary actions (resign, draw offers) are used
+honestly - there's no way to "cheat" a chess move through, but you could
+still misuse those secondary actions. Minor by comparison.
 
 ## Connection details
 
@@ -128,28 +133,33 @@ generation - the format above is the whole contract.
 ## 4. Making a move
 
 Once it's your turn (`state.turn === yourColor`), pick a legal move (via
-`legalMoves()` if you're using `rules.js`, or your own logic), then:
+`legalMoves()` if you're using `rules.js`, or your own logic - it just
+needs to be *a* legal move, since the server independently verifies this
+regardless), then POST the move intent - not a resulting state, not SAN,
+not a ply number, the server derives all of that itself:
 
 ```
-PATCH rest/v1/games?id=eq.<game_id>&<color>_token=eq.<your_token>
-{
-  "state": <new state after applyMove()>,
-  "updated_at": "<current ISO timestamp>",
-  "status": "finished",   // only if the game just ended
-  "result": "1-0"          // only if the game just ended
-}
+POST /functions/v1/submit-move
+Content-Type: application/json
+
+{ "gameId": "<game_id>", "color": "w", "token": "<your_token>", "from": 52, "to": 36, "promo": "Q" }
 ```
 
-The token filter in the URL (not the body) is what proves you're allowed
-to move that color - if it doesn't match, zero rows update and you get
-back an empty array, not an error.
+(`promo` only for pawn promotion; omit otherwise.) This is a different
+base URL than everything else in this guide - `/functions/v1/...`, not
+`/rest/v1/...` - and doesn't need the `apikey`/`Authorization` headers,
+since authorization here is your per-game token, not the platform key.
 
-Then log the move for the scoresheet/replay:
+Response on success (`200`):
 
+```json
+{ "ok": true, "san": "e4", "move": { "from": 52, "to": 36, "piece": "wP", "captured": null, "flag": "double" }, "game": { ...full updated row... } }
 ```
-POST rest/v1/moves
-{ "game_id": "<game_id>", "ply": <1-indexed move number>, "san": "e4", "move": <the move object> }
-```
+
+On rejection (illegal move, wrong token, not your turn, game not active),
+you get a non-200 status and `{ "error": "..." }` - nothing about the
+game changes. Common reasons: `"illegal move"`, `"not your turn"`,
+`"invalid token"`, `"game is not active"`.
 
 ## 5. Detecting the game ended
 

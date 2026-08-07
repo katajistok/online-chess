@@ -10,7 +10,7 @@
 //
 // Usage: node random-bot.mjs <name> [w|b|either]
 
-import { initialState, legalMoves, applyMove, toSAN, gameStatus, posKey } from "../rules.js";
+import { initialState, legalMoves, applyMove } from "../rules.js";
 
 const SUPABASE_URL = "https://ulewbiwfvvhigxpuvqss.supabase.co";
 const SUPABASE_KEY = "sb_publishable_rAM-oAxs-_XOp7_OaKHKFA_1axig43n";
@@ -33,6 +33,21 @@ async function api(path, { method = "GET", body } = {}) {
   return res.json();
 }
 const rpc = (fn, args) => api(`rpc/${fn}`, { method: "POST", body: args });
+
+// The move itself is validated server-side (see
+// ../supabase/functions/submit-move) - we send the intent (from/to/promo)
+// and get back the authoritative resulting game row, not the other way
+// around. This is the only path that can change a game's board state.
+async function submitMove(gameId, color, token, move) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/submit-move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gameId, color, token, from: move.from, to: move.to, promo: move.promo }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `submit-move -> ${res.status}`);
+  return data;
+}
 
 async function main() {
   console.log(`[${name}] registering...`);
@@ -100,24 +115,10 @@ async function playGame({ gameId, myColor, myToken }) {
       const options = legalMoves(state);
       if (!options.length) { await sleep(1000); continue; } // checkmate/stalemate - status will flip to finished shortly
       const move = options[Math.floor(Math.random() * options.length)];
-      const san = toSAN(state, move);
-      const newState = applyMove(state, move);
-      history.push(newState);
+      const result = await submitMove(gameId, myColor, myToken, move);
+      console.log(`[${name}] playing ${result.san}`);
+      history.push(applyMove(state, result.move));
       moveCount++;
-
-      const reps = history.filter((s) => posKey(s) === posKey(newState)).length;
-      const stat = gameStatus(newState, reps);
-      console.log(`[${name}] playing ${san}`);
-      const tokenColumn = myColor === "w" ? "white_token" : "black_token";
-      await api(`games?id=eq.${gameId}&${tokenColumn}=eq.${myToken}`, {
-        method: "PATCH",
-        body: {
-          state: newState,
-          updated_at: new Date().toISOString(),
-          ...(stat.over ? { status: "finished", result: stat.result } : {}),
-        },
-      });
-      await api("moves", { method: "POST", body: { game_id: gameId, ply: moveCount, san, move } });
     }
 
     await sleep(1000); // poll interval

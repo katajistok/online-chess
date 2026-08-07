@@ -249,25 +249,17 @@ function onMoveInserted(row) {
 }
 
 async function pushMoveToServer(m) {
-  const san = sanLog[sanLog.length - 1];
-  const stat = gameStatus(state(), reps());
-  let timeRemainingMs;
-  if (gameRow?.time_limit_seconds != null && gameRow.turn_started_at) {
-    const before = myColor === "w" ? gameRow.white_time_remaining_ms : gameRow.black_time_remaining_ms;
-    const elapsed = Date.now() - new Date(gameRow.turn_started_at).getTime();
-    timeRemainingMs = Math.max(0, before - elapsed);
-  }
+  // The server independently re-derives state/SAN/game-over/clock from
+  // its own replay of the game now (see submit-move) - we only send the
+  // move intent. Our own optimistic local animation already happened; if
+  // the server disagrees (should only happen on a genuine bug or a race),
+  // resync from the authoritative source rather than staying desynced.
   try {
-    await sendMove({
-      gameId: roomId, color: myColor, token: myToken,
-      ply: moveLog.length, san, move: m, state: state(),
-      status: stat.over ? "finished" : "active",
-      result: stat.over ? stat.result : undefined,
-      timeRemainingMs,
-    });
+    await sendMove({ gameId: roomId, color: myColor, token: myToken, move: { from: m.from, to: m.to, promo: m.promo } });
   } catch (e) {
     console.error("Failed to send move:", e);
     alert("Couldn't send your move — check your connection and try again.");
+    await syncFromServer();
   }
 }
 

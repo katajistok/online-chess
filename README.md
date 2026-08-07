@@ -96,9 +96,10 @@ Design notes worth knowing if you're reading the code:
   its (unguessable) URL; a per-game token proves which color a browser
   is allowed to move. See the security-model comment at the top of
   `supabase-client.js`.
-- **Trust model.** Moves aren't validated server-side — a client
-  computes and reports its own move. Fine for casual play; the honesty
-  trade-off this creates for rated games is spelled out in `AGENT.md`.
+- **Moves are validated server-side.** A client submits a move *intent*;
+  a Supabase Edge Function (`supabase/functions/submit-move`) replays the
+  whole game from its own record and rejects anything illegal. Clients
+  can't write `games.state` or `moves` any other way — see `AGENT.md`.
 - **Everything reruns through `rules.js`.** The same move-generation/SAN
   code powers the offline `simple-chess` game, this online version, the
   reference bot, and (indirectly) Elo scoring — one engine, several
