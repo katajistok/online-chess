@@ -6,14 +6,23 @@ in a browser; bots use the same backend directly over HTTP. Both share
 the same matchmaking pool - a bot might get matched against a human, or
 another bot.
 
-**Working example**: [`examples/random-bot.mjs`](examples/random-bot.mjs)
-implements everything in this guide as a runnable Node script with zero
-dependencies. Reading the code is probably faster than reading this doc.
-Run two of them at once to watch a full game happen:
+**Working examples**: [`examples/random-bot.mjs`](examples/random-bot.mjs)
+(picks randomly) and [`examples/llm-bot.mjs`](examples/llm-bot.mjs) (asks a
+local LLM to choose from the legal moves) both implement everything in
+this guide as runnable Node scripts with zero dependencies. Reading the
+code is probably faster than reading this doc. Run two at once to watch
+a full game happen - color is `w`, `b`, or `either`, not the full word:
 
 ```
-node examples/random-bot.mjs Bot1 white &
-node examples/random-bot.mjs Bot2 black
+node examples/random-bot.mjs Bot1 w &
+node examples/random-bot.mjs Bot2 b
+```
+
+Or join a specific room directly instead of random matchmaking - useful
+to play a particular human, or have them play your bot:
+
+```
+node examples/random-bot.mjs Bot1 <room-id-or-invite-link>
 ```
 
 ## Trust and rating integrity
@@ -75,19 +84,35 @@ POST rest/v1/rpc/match_lobby_as_player
 ```
 
 `p_wants_color` is `"w"`, `"b"`, or `"either"`. Returns
-`[{ matched, lobby_id, game_id, color }]`.
+`[{ matched, lobby_id, game_id, color, token }]` - `token` is your
+move-authorization token either way, no separate fetch needed.
 
-- If `matched: true` - you're already in a game (`game_id`, and your
-  `color`). Fetch your own move-token: `GET games?id=eq.<game_id>&select=white_token,black_token` and take whichever column matches your color.
-- If `matched: false` - you're `lobby_id` in the waiting queue. Poll
+- If `matched: true` - you're already in a game (`game_id`, `color`,
+  `token`, all in the response).
+- If `matched: false` - you're `lobby_id` in the waiting queue, and
+  `token` is already yours for when you do get matched. Poll
   `GET lobby?id=eq.<lobby_id>&select=status,matched_game_id,matched_color`
   every second or so until `status` becomes `"matched"`.
 
-**Option B - playing anonymously (no rating):** same idea, but call
-`rpc/match_lobby` directly with `{ p_nickname, p_wants_color, p_token }`
-where `p_token` is a UUID you generate yourself - this becomes your
-move-token directly, no need to fetch it afterward. No `api_key`
-involved, no rating impact.
+**Option B - join a specific room directly**, e.g. to play a particular
+human (or have your bot get played *by* one) rather than a random match:
+
+```
+POST rest/v1/rpc/join_room_as_player
+{ "p_game_id": "<game id from the room's invite link>", "p_api_key": "<your api_key>" }
+```
+
+Returns `{ joined, color, token }` - `joined: false` means the room is
+already full or doesn't exist. You'll always join as black, same as any
+human clicking that same invite link.
+
+**Option C - playing anonymously (no rating):** same idea as Option A,
+but call `rpc/match_lobby` directly with `{ p_nickname, p_wants_color, p_token }`
+where `p_token` is a UUID you generate yourself. No `api_key` involved,
+no rating impact. (There's an anonymous equivalent of joining a specific
+room too - see `joinRoom()` in `supabase-client.js` - but registering is
+one extra call and gets you a rating, so there's little reason to bother
+with the anonymous path for a bot.)
 
 ## 3. The game state
 
@@ -161,16 +186,43 @@ you get a non-200 status and `{ "error": "..." }` - nothing about the
 game changes. Common reasons: `"illegal move"`, `"not your turn"`,
 `"invalid token"`, `"game is not active"`.
 
-## 5. Detecting the game ended
+## 5. Resigning or offering a draw (optional)
+
+Plain `PATCH` calls, token-gated the same way everything else is - not
+required to play, but available if your bot wants to resign a lost
+position or negotiate a draw rather than always playing to the end:
+
+```
+# resign - the other color wins immediately
+PATCH rest/v1/games?id=eq.<game_id>&<color>_token=eq.<your_token>&status=eq.active
+{ "status": "finished", "result": "<0-1 if you're white, 1-0 if you're black>", "end_reason": "resignation" }
+
+# offer a draw
+PATCH rest/v1/games?id=eq.<game_id>&<color>_token=eq.<your_token>&status=eq.active
+{ "draw_offered_by": "<your color, 'w' or 'b'>" }
+
+# accept the opponent's pending draw offer (note the extra filter -
+# this only succeeds if THEY offered, not you)
+PATCH rest/v1/games?id=eq.<game_id>&<color>_token=eq.<your_token>&draw_offered_by=eq.<opponent's color>
+{ "status": "finished", "result": "1/2-1/2", "end_reason": "agreement", "draw_offered_by": null }
+```
+
+A pending offer also clears automatically the moment either side makes
+another move via `/functions/v1/submit-move` (see `supabase-client.js`'s
+`sendMove()`), so a bot can just ignore an offer by playing on instead of
+explicitly declining it.
+
+## 6. Detecting the game ended
 
 Poll `GET games?id=eq.<game_id>&select=status,result` (or watch for your
 own `legalMoves()` coming back empty - checkmate/stalemate). `status`
-becomes `"finished"` either because someone's `gameStatus()` said the
-game was over, or because a clock ran out and someone called
-`claimTimeout` (see `supabase-client.js` if you want to detect and claim
-opponent timeouts yourself - not required to play).
+becomes `"finished"` because someone's `gameStatus()` said the game was
+over, a clock ran out and someone called `claimTimeout`, or a
+resignation/draw-acceptance happened (see `supabase-client.js` if you
+want to detect and claim opponent timeouts yourself - not required to
+play).
 
-## 6. Your rating / the leaderboard
+## 7. Your rating / the leaderboard
 
 ```
 POST rest/v1/rpc/my_player_stats   { "p_api_key": "<your api_key>" }

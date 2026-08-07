@@ -25,13 +25,20 @@ single-player-vs-computer version.
   an immediate loss. Optional — "no limit" games have no clock at all.
 - **Animated pieces** — walking moves, capture clashes, the same
   presentation as `simple-chess`.
+- **Resign / offer a draw** — for when a game doesn't need to go to
+  checkmate.
 - **Nicknames** — pick your own, or a random one is assigned.
 - **Elo rating & leaderboard** — register a persistent name (see below)
-  and your rating updates automatically after every rated game. See the
+  and your rating updates automatically after every rated game. Works
+  across devices too - "Show my key" reveals your credential to copy
+  elsewhere, "Sign in with your key" picks the same identity back up on
+  another browser. See the
   [full leaderboard](https://katajistok.github.io/online-chess/leaderboard.html).
 - **Playable via API** — the same backend a browser uses is a plain
-  HTTP API; see [AGENT.md](AGENT.md) for AI agents / bots that want to
-  play programmatically.
+  HTTP API, with moves validated server-side (not just trusted); see
+  [AGENT.md](AGENT.md) for AI agents / bots that want to play
+  programmatically. Includes a working reference bot that can play
+  against a locally-run LLM.
 
 ## How to play
 
@@ -48,6 +55,8 @@ single-player-vs-computer version.
    play it. The board flips automatically if you're black.
 5. If the game has a clock, running out of time is an automatic loss —
    nothing to click, it's detected and applied for you.
+6. *Resign* or *Offer draw* buttons are in the Game panel once your
+   opponent has joined, if you'd rather not play to checkmate.
 
 Ratings are separate from casual play: only games where **both** players
 registered an account (see [AGENT.md](AGENT.md) for how — it's simple
@@ -72,22 +81,26 @@ face a person or another bot.
 ## How it's built
 
 Plain HTML/CSS/JS — no framework, no build step, no server to run or
-pay for. [Supabase](https://supabase.com) (Postgres + Realtime) is the
-entire backend; every "server-side" rule (matchmaking pairing, Elo
-updates) is a Postgres function or trigger, called directly from the
-browser or a bot's HTTP client.
+pay for. [Supabase](https://supabase.com) is the entire backend: Postgres
++ Realtime for data/sync, database functions/triggers for server-side
+rules that are cheap to express in SQL (matchmaking pairing, Elo
+updates), and one Deno Edge Function for the one thing that genuinely
+needed real code - re-validating chess moves using the same `rules.js`
+the browser uses.
 
 ```
 online-chess/
-├── index.html            landing page: nickname, matchmaking, create-room, leaderboard preview
-├── game.html              the actual game screen (board, clock, scoresheet)
-├── leaderboard.html        full Elo leaderboard
-├── rules.js                 chess rules engine (board, legal moves, SAN) - zero dependencies
-├── supabase-client.js      every Supabase call lives here - the rest of the app calls these functions
-├── supabase-config.js      project URL + public API key
-├── supabase/                SQL migrations, run in order in the Supabase SQL editor
-├── examples/random-bot.mjs  a working reference bot (see AGENT.md)
-└── AGENT.md                 API guide for AI agents / bots
+├── index.html                        landing page: nickname/registration, matchmaking, create-room, leaderboard preview
+├── game.html                          the actual game screen (board, clock, scoresheet, resign/draw)
+├── leaderboard.html                    full Elo leaderboard
+├── rules.js                             chess rules engine (board, legal moves, SAN) - zero dependencies
+├── supabase-client.js                  every Supabase call lives here - the rest of the app calls these functions
+├── supabase-config.js                  project URL + public API key
+├── supabase/                            SQL migrations, run in order in the Supabase SQL editor
+│   └── functions/submit-move/          the Edge Function that validates every move server-side
+├── examples/random-bot.mjs             a working reference bot (see AGENT.md)
+├── examples/llm-bot.mjs                same, but a local LLM picks the move
+└── AGENT.md                             API guide for AI agents / bots
 ```
 
 Design notes worth knowing if you're reading the code:
