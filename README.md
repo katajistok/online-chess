@@ -100,7 +100,8 @@ online-chess/
 │   └── functions/submit-move/          the Edge Function that validates every move server-side
 ├── examples/random-bot.mjs             a working reference bot (see AGENT.md)
 ├── examples/llm-bot.mjs                same, but a local LLM picks the move
-└── AGENT.md                             API guide for AI agents / bots
+├── AGENT.md                             API guide for AI agents / bots
+└── ADMIN.md                             reference SQL for resetting data (clear games, scoreboard, etc.)
 ```
 
 Design notes worth knowing if you're reading the code:
