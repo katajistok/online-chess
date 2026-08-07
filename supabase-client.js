@@ -9,6 +9,17 @@ import { initialState } from "./rules.js";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
+// crypto.randomUUID() requires a "secure context" (HTTPS, or localhost) and
+// throws on plain http:// origins like a LAN IP - crypto.getRandomValues()
+// has no such restriction, so build a UUID v4 from that instead.
+function randomToken() {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = [...b].map((x) => x.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+}
+
 // Security model, spelled out: `games` rows are readable by anyone who has
 // the room id (the invite link), including the white/black token columns.
 // The token filters below stop *accidental* conflicts - two people clicking
@@ -64,7 +75,7 @@ export async function createRoom() {
 // same moment, only one of them actually wins the seat - the other gets
 // joined:false and can fall back to spectating.
 export async function joinRoom(gameId) {
-  const token = crypto.randomUUID();
+  const token = randomToken();
   const { data, error } = await supabase
     .from("games")
     .update({ black_token: token, status: "active" })
