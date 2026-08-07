@@ -94,8 +94,18 @@ export function setNickname(nick) {
 // Creates a new room, seeded with the standard starting position. The
 // creator is always white. Returns the token their browser should keep
 // (e.g. in localStorage) to prove they're allowed to move white's pieces.
-export async function createRoom(nickname) {
-  const { data, error } = await supabase.from("games").insert({ state: initialState(), white_nickname: nickname }).select().single();
+// timeLimitSeconds is the total clock each player gets, like a real chess
+// clock (null = no clock). The clock doesn't start yet - `turn_started_at`
+// is deliberately left unset here and only begins once an opponent
+// actually joins (see joinRoom), so nobody's time ticks away while waiting
+// alone in an empty room.
+export async function createRoom(nickname, timeLimitSeconds = 180) {
+  const insert = { state: initialState(), white_nickname: nickname, time_limit_seconds: timeLimitSeconds };
+  if (timeLimitSeconds != null) {
+    insert.white_time_remaining_ms = timeLimitSeconds * 1000;
+    insert.black_time_remaining_ms = timeLimitSeconds * 1000;
+  }
+  const { data, error } = await supabase.from("games").insert(insert).select().single();
   if (error) throw error;
   logEvent("room_created", data.id);
   return { gameId: data.id, color: "w", token: data.white_token };
@@ -104,12 +114,14 @@ export async function createRoom(nickname) {
 // Attempts to claim the black seat in an existing room. Uses a conditional
 // update (`black_token is null`) so that if two people click "join" at the
 // same moment, only one of them actually wins the seat - the other gets
-// joined:false and can fall back to spectating.
+// joined:false and can fall back to spectating. This is also the moment
+// white's clock genuinely starts (turn_started_at = now), not whenever the
+// room happened to be created.
 export async function joinRoom(gameId, nickname) {
   const token = randomToken();
   const { data, error } = await supabase
     .from("games")
-    .update({ black_token: token, black_nickname: nickname, status: "active" })
+    .update({ black_token: token, black_nickname: nickname, status: "active", turn_started_at: new Date().toISOString() })
     .eq("id", gameId)
     .is("black_token", null)
     .select()
@@ -181,11 +193,21 @@ export async function getMoves(gameId) {
 // the games.<color>_token column server-side or the update silently matches
 // zero rows and this throws - that's what stops a stale/other-color tab
 // from pushing a move for the wrong side.
-export async function sendMove({ gameId, color, token, ply, san, move, state, status, result }) {
+//
+// timeRemainingMs (when the game has a clock) is the mover's own remaining
+// time AFTER this move, computed client-side as
+// (their time before this turn) - (elapsed time they just spent thinking).
+// Banking it here, and resetting turn_started_at, is what makes the clock
+// hand off to the other player.
+export async function sendMove({ gameId, color, token, ply, san, move, state, status, result, timeRemainingMs }) {
   const tokenColumn = color === "w" ? "white_token" : "black_token";
   const patch = { state, updated_at: new Date().toISOString() };
   if (status) patch.status = status;
   if (result) patch.result = result;
+  if (timeRemainingMs != null) {
+    patch[color === "w" ? "white_time_remaining_ms" : "black_time_remaining_ms"] = Math.max(0, Math.round(timeRemainingMs));
+    patch.turn_started_at = new Date().toISOString();
+  }
 
   const { data, error } = await supabase
     .from("games")
@@ -200,6 +222,27 @@ export async function sendMove({ gameId, color, token, ply, san, move, state, st
   if (moveError) console.warn("Failed to log move to history:", moveError.message);
 
   logEvent(status === "finished" ? "game_finished" : "move_made", gameId);
+  return data;
+}
+
+// Declares a loss by timeout. Any client (whichever notices the deadline
+// has passed first - usually the player who's about to win, since they're
+// the one still actively watching the clock) can call this using its own
+// token; `.eq("status", "active")` means only the first caller actually
+// changes anything if both clients notice at once.
+export async function claimTimeout({ gameId, myColor, myToken, loserColor }) {
+  const tokenColumn = myColor === "w" ? "white_token" : "black_token";
+  const result = loserColor === "w" ? "0-1" : "1-0";
+  const { data, error } = await supabase
+    .from("games")
+    .update({ status: "finished", result })
+    .eq("id", gameId)
+    .eq(tokenColumn, myToken)
+    .eq("status", "active")
+    .select()
+    .maybeSingle();
+  if (error || !data) return null;
+  logEvent("game_finished", gameId);
   return data;
 }
 

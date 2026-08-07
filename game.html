@@ -67,6 +67,10 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
 .promo button:hover{background:#D6B25E}
 .invite{font-family:monospace;font-size:12px;background:#20261F;border:1px solid #3C4A3D;border-radius:3px;padding:8px;word-break:break-all;user-select:all}
 .you{font-size:12px;color:#9FAE9B;font-family:monospace}
+.clockrow{display:flex;align-items:center;gap:10px;min-height:34px}
+.clock{font-family:monospace;font-size:19px;background:#2B342C;border:1px solid #3C4A3D;border-radius:3px;padding:5px 12px;min-width:64px;text-align:center;color:#9FAE9B}
+.clock.ticking{background:#4A6B4C;border-color:#5F8562;color:#F3D98B}
+.clock.low{background:#5C2B28;border-color:#8A3B36;color:#F3B7B0}
 </style>
 </head>
 <body>
@@ -78,7 +82,7 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
   <div class="main">
     <div class="boardcol">
       <div class="status-bar" id="status"></div>
-      <div class="captured" id="cap-top"></div>
+      <div class="clockrow"><span class="clock" id="clock-top">–:–</span><div class="captured" id="cap-top"></div></div>
       <div class="boardwrap">
         <div class="board" id="board"></div>
         <div class="sprites" id="sprites"></div>
@@ -86,7 +90,7 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
           <div class="promo" id="promo-btns"></div>
         </div>
       </div>
-      <div class="captured" id="cap-bot"></div>
+      <div class="clockrow"><span class="clock" id="clock-bot">–:–</span><div class="captured" id="cap-bot"></div></div>
     </div>
     <div class="panel">
       <div class="card" id="invite-card" style="display:none">
@@ -109,7 +113,7 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
 
 <script type="module">
 import { legalMoves, applyMove, gameStatus, toSAN, rowOf, colOf, findKing, inCheck, initialState } from "./rules.js";
-import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame, getNickname, saveIdentity, loadIdentity } from "./supabase-client.js";
+import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame, getNickname, saveIdentity, loadIdentity, claimTimeout } from "./supabase-client.js";
 
 // ═══════════════════════════════════════════════════════
 //  ROOM / IDENTITY
@@ -184,7 +188,16 @@ function state() { return history[history.length - 1]; }
 function reps() { const k = posKey(state()); return history.filter((s) => posKey(s) === k).length; }
 function posKey(s) { return s.board.map((p) => p || ".").join("") + s.turn + (s.castling.wK ? "K" : "") + (s.castling.wQ ? "Q" : "") + (s.castling.bK ? "k" : "") + (s.castling.bQ ? "q" : "") + s.ep; }
 function status() { return gameStatus(state(), reps()); }
-function legal() { return status().over ? [] : status().moves; }
+// Board-only truth (checkmate/stalemate/draws) always wins; a server-side
+// "finished" that the board doesn't independently agree with (nothing else
+// sets that today) means a timeout was declared - see claimTimeout().
+function effectiveStatus() {
+  const local = status();
+  if (local.over) return local;
+  if (gameRow?.status === "finished" && gameRow.result) return { over: true, result: gameRow.result, reason: "time" };
+  return local;
+}
+function legal() { return effectiveStatus().over ? [] : status().moves; }
 
 // ═══════════════════════════════════════════════════════
 //  SERVER SYNC
@@ -229,18 +242,86 @@ function onMoveInserted(row) {
 async function pushMoveToServer(m) {
   const san = sanLog[sanLog.length - 1];
   const stat = gameStatus(state(), reps());
+  let timeRemainingMs;
+  if (gameRow?.time_limit_seconds != null && gameRow.turn_started_at) {
+    const before = myColor === "w" ? gameRow.white_time_remaining_ms : gameRow.black_time_remaining_ms;
+    const elapsed = Date.now() - new Date(gameRow.turn_started_at).getTime();
+    timeRemainingMs = Math.max(0, before - elapsed);
+  }
   try {
     await sendMove({
       gameId: roomId, color: myColor, token: myToken,
       ply: moveLog.length, san, move: m, state: state(),
       status: stat.over ? "finished" : "active",
       result: stat.over ? stat.result : undefined,
+      timeRemainingMs,
     });
   } catch (e) {
     console.error("Failed to send move:", e);
     alert("Couldn't send your move — check your connection and try again.");
   }
 }
+
+// ═══════════════════════════════════════════════════════
+//  CLOCK
+// ═══════════════════════════════════════════════════════
+let claimingTimeout = false;
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function renderClockEl(id, ms, ticking) {
+  const el = document.getElementById(id);
+  el.style.display = "";
+  el.textContent = formatClock(ms);
+  el.classList.toggle("ticking", ticking);
+  el.classList.toggle("low", ms < 10000);
+}
+
+function tickClock() {
+  if (!gameRow || gameRow.time_limit_seconds == null) {
+    document.getElementById("clock-top").style.display = "none";
+    document.getElementById("clock-bot").style.display = "none";
+    return;
+  }
+  const stat = effectiveStatus();
+  const over = stat.over;
+  const isLive = !over && gameRow.status === "active" && gameRow.turn_started_at;
+  const turn = state().turn;
+  let whiteMs = gameRow.white_time_remaining_ms ?? gameRow.time_limit_seconds * 1000;
+  let blackMs = gameRow.black_time_remaining_ms ?? gameRow.time_limit_seconds * 1000;
+
+  if (isLive) {
+    const elapsed = Date.now() - new Date(gameRow.turn_started_at).getTime();
+    if (turn === "w") whiteMs = Math.max(0, whiteMs - elapsed);
+    else blackMs = Math.max(0, blackMs - elapsed);
+  } else if (over && stat.reason === "time") {
+    // The stored remaining-time value never gets written back to 0 - only
+    // status/result do (see claimTimeout) - so force the side that actually
+    // ran out to visually freeze at 0:00 instead of showing its stale value.
+    if (stat.result === "0-1") whiteMs = 0;
+    else if (stat.result === "1-0") blackMs = 0;
+  }
+
+  // Same top=opponent/bottom=you convention as renderCaptured(): white is
+  // shown at top only when the board is flipped (i.e. I'm black).
+  const topIsWhite = flip();
+  renderClockEl("clock-top", topIsWhite ? whiteMs : blackMs, isLive && ((topIsWhite && turn === "w") || (!topIsWhite && turn === "b")));
+  renderClockEl("clock-bot", topIsWhite ? blackMs : whiteMs, isLive && ((topIsWhite && turn === "b") || (!topIsWhite && turn === "w")));
+
+  if (isLive && myColor && !claimingTimeout) {
+    const currentMoverMs = turn === "w" ? whiteMs : blackMs;
+    if (currentMoverMs <= 0) {
+      claimingTimeout = true;
+      claimTimeout({ gameId: roomId, myColor, myToken, loserColor: turn })
+        .catch((e) => console.error("claimTimeout failed:", e))
+        .finally(() => { claimingTimeout = false; });
+    }
+  }
+}
+setInterval(tickClock, 250);
 
 // ═══════════════════════════════════════════════════════
 //  ANIMATION (from simple-chess/chess.html)
@@ -325,7 +406,7 @@ function render() {
 
 function renderBoard() {
   const boardEl = document.getElementById("board");
-  const s = state(), stat = status(), lm = lastMove;
+  const s = state(), stat = effectiveStatus(), lm = lastMove;
   const moves = legal();
   const canInteract = myColor && !animating && !stat.over && s.turn === myColor;
   const targets = canInteract && selected >= 0 ? moves.filter((m) => m.from === selected) : [];
@@ -370,11 +451,12 @@ function renderSprites() {
 }
 
 function renderStatus() {
-  const s = state(), stat = status();
+  const s = state(), stat = effectiveStatus();
   const el = document.getElementById("status");
   if (stat.over) {
     const r = stat.result === "1/2-1/2" ? "Draw" : stat.result === "1-0" ? "White wins" : "Black wins";
-    el.innerHTML = `<span class="result">${r} — ${stat.reason}</span>`;
+    const reason = stat.reason === "time" ? "on time" : stat.reason;
+    el.innerHTML = `<span class="result">${r} — ${reason}</span>`;
   } else if (animating) {
     el.innerHTML = '<span class="thinking">…</span>';
   } else if (myColor && !gameRow?.black_token) {
@@ -417,7 +499,7 @@ function renderCaptured() {
 //  INTERACTION
 // ═══════════════════════════════════════════════════════
 function clickSquare(sq) {
-  const s = state(), stat = status();
+  const s = state(), stat = effectiveStatus();
   if (!myColor || animating || stat.over || s.turn !== myColor) return;
   const promoOverlay = document.getElementById("promo-overlay");
   if (promoOverlay.style.display !== "none") return;

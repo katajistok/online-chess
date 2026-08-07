@@ -57,13 +57,20 @@ a.btn{display:block;text-align:center;text-decoration:none}
 
     <div class="card">
       <h3>Play a friend</h3>
-      <a class="btn" href="game.html">Create a private room →</a>
+      <div class="row" id="time-btns">
+        <button class="btn" data-time="60">1 min</button>
+        <button class="btn active" data-time="180">3 min</button>
+        <button class="btn" data-time="300">5 min</button>
+        <button class="btn" data-time="600">10 min</button>
+        <button class="btn" data-time="">No limit</button>
+      </div>
+      <button class="btn primary" id="create-btn">Create a private room →</button>
       <div class="note">Get an invite link to send them.</div>
     </div>
   </div>
 
 <script type="module">
-import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity } from "./supabase-client.js";
+import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom } from "./supabase-client.js";
 
 subscribeStats((stats) => {
   document.getElementById("stat-games").textContent = stats.gamesOngoing;
@@ -122,6 +129,27 @@ findBtn.onclick = async () => {
     console.error(e);
   } finally {
     findBtn.disabled = false;
+  }
+};
+
+let timeLimitSeconds = 180;
+document.querySelectorAll("#time-btns .btn").forEach((b) => {
+  b.onclick = () => {
+    timeLimitSeconds = b.dataset.time ? Number(b.dataset.time) : null;
+    document.querySelectorAll("#time-btns .btn").forEach((x) => x.classList.toggle("active", x === b));
+  };
+});
+
+const createBtn = document.getElementById("create-btn");
+createBtn.onclick = async () => {
+  createBtn.disabled = true;
+  try {
+    const room = await createRoom(getNickname(), timeLimitSeconds);
+    goToGame(room);
+  } catch (e) {
+    alert("Couldn't create a room — check your connection and try again.");
+    console.error(e);
+    createBtn.disabled = false;
   }
 };
 </script>
