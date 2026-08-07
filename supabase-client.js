@@ -209,7 +209,10 @@ export async function getMoves(gameId) {
 // hand off to the other player.
 export async function sendMove({ gameId, color, token, ply, san, move, state, status, result, timeRemainingMs }) {
   const tokenColumn = color === "w" ? "white_token" : "black_token";
-  const patch = { state, updated_at: new Date().toISOString() };
+  // A move implicitly answers any pending draw offer - either you just
+  // declined it by playing on, or you're the offerer moving anyway, which
+  // withdraws it. Either way it shouldn't linger.
+  const patch = { state, updated_at: new Date().toISOString(), draw_offered_by: null };
   if (status) patch.status = status;
   if (result) patch.result = result;
   if (timeRemainingMs != null) {
@@ -243,7 +246,7 @@ export async function claimTimeout({ gameId, myColor, myToken, loserColor }) {
   const result = loserColor === "w" ? "0-1" : "1-0";
   const { data, error } = await supabase
     .from("games")
-    .update({ status: "finished", result })
+    .update({ status: "finished", result, end_reason: "timeout" })
     .eq("id", gameId)
     .eq(tokenColumn, myToken)
     .eq("status", "active")
@@ -251,6 +254,59 @@ export async function claimTimeout({ gameId, myColor, myToken, loserColor }) {
     .maybeSingle();
   if (error || !data) return null;
   logEvent("game_finished", gameId);
+  return data;
+}
+
+// Voluntary resignation. The other color wins immediately.
+export async function resignGame({ gameId, myColor, myToken }) {
+  const tokenColumn = myColor === "w" ? "white_token" : "black_token";
+  const result = myColor === "w" ? "0-1" : "1-0";
+  const { data, error } = await supabase
+    .from("games")
+    .update({ status: "finished", result, end_reason: "resignation" })
+    .eq("id", gameId)
+    .eq(tokenColumn, myToken)
+    .eq("status", "active")
+    .select()
+    .maybeSingle();
+  if (error || !data) return null;
+  logEvent("game_finished", gameId);
+  return data;
+}
+
+// Offers a draw - only sets your OWN color as the offerer, gated by your
+// own token like every other write here.
+export async function offerDraw({ gameId, myColor, myToken }) {
+  const tokenColumn = myColor === "w" ? "white_token" : "black_token";
+  const { error } = await supabase
+    .from("games")
+    .update({ draw_offered_by: myColor })
+    .eq("id", gameId)
+    .eq(tokenColumn, myToken)
+    .eq("status", "active");
+  if (error) throw error;
+}
+
+// Responds to a pending draw offer. Accepting is gated by
+// `draw_offered_by=eq.<opponent's color>` in addition to your own token -
+// that's what stops a player from "accepting" an offer they made
+// themselves. Declining just clears the offer so play continues.
+export async function respondToDraw({ gameId, myColor, myToken, accept }) {
+  const tokenColumn = myColor === "w" ? "white_token" : "black_token";
+  const opponentColor = myColor === "w" ? "b" : "w";
+  const patch = accept
+    ? { status: "finished", result: "1/2-1/2", end_reason: "agreement", draw_offered_by: null }
+    : { draw_offered_by: null };
+  const { data, error } = await supabase
+    .from("games")
+    .update(patch)
+    .eq("id", gameId)
+    .eq(tokenColumn, myToken)
+    .eq("draw_offered_by", opponentColor)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (accept && data) logEvent("game_finished", gameId);
   return data;
 }
 

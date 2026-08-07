@@ -97,9 +97,16 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
         <h3>Invite a friend</h3>
         <div class="invite" id="invite-link"></div>
       </div>
+      <div class="card" id="draw-offer-card" style="display:none">
+        <h3>Draw offer</h3>
+        <div id="draw-offer-text" style="margin-bottom:10px"></div>
+        <div class="row" id="draw-offer-actions"></div>
+      </div>
       <div class="card">
         <h3>Game</h3>
         <div class="row">
+          <button class="btn" id="offer-draw-btn" style="display:none">Offer draw</button>
+          <button class="btn" id="resign-btn" style="display:none">Resign</button>
           <a class="btn" href="game.html">New room</a>
         </div>
       </div>
@@ -113,7 +120,7 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
 
 <script type="module">
 import { legalMoves, applyMove, gameStatus, toSAN, rowOf, colOf, findKing, inCheck, initialState } from "./rules.js";
-import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame, getNickname, saveIdentity, loadIdentity, claimTimeout } from "./supabase-client.js";
+import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame, getNickname, saveIdentity, loadIdentity, claimTimeout, resignGame, offerDraw, respondToDraw } from "./supabase-client.js";
 
 // ═══════════════════════════════════════════════════════
 //  ROOM / IDENTITY
@@ -189,12 +196,14 @@ function reps() { const k = posKey(state()); return history.filter((s) => posKey
 function posKey(s) { return s.board.map((p) => p || ".").join("") + s.turn + (s.castling.wK ? "K" : "") + (s.castling.wQ ? "Q" : "") + (s.castling.bK ? "k" : "") + (s.castling.bQ ? "q" : "") + s.ep; }
 function status() { return gameStatus(state(), reps()); }
 // Board-only truth (checkmate/stalemate/draws) always wins; a server-side
-// "finished" that the board doesn't independently agree with (nothing else
-// sets that today) means a timeout was declared - see claimTimeout().
+// "finished" that the board doesn't independently agree with means the
+// game ended some other way - timeout, resignation, or a draw offer being
+// accepted (see claimTimeout/resignGame/respondToDraw) - gameRow.end_reason
+// says which.
 function effectiveStatus() {
   const local = status();
   if (local.over) return local;
-  if (gameRow?.status === "finished" && gameRow.result) return { over: true, result: gameRow.result, reason: "time" };
+  if (gameRow?.status === "finished" && gameRow.result) return { over: true, result: gameRow.result, reason: gameRow.end_reason ?? "timeout" };
   return local;
 }
 function legal() { return effectiveStatus().over ? [] : status().moves; }
@@ -297,7 +306,7 @@ function tickClock() {
     const elapsed = Date.now() - new Date(gameRow.turn_started_at).getTime();
     if (turn === "w") whiteMs = Math.max(0, whiteMs - elapsed);
     else blackMs = Math.max(0, blackMs - elapsed);
-  } else if (over && stat.reason === "time") {
+  } else if (over && stat.reason === "timeout") {
     // The stored remaining-time value never gets written back to 0 - only
     // status/result do (see claimTimeout) - so force the side that actually
     // ran out to visually freeze at 0:00 instead of showing its stale value.
@@ -402,6 +411,34 @@ function render() {
   renderStatus();
   renderSheet();
   renderCaptured();
+  renderGameControls();
+}
+
+function renderGameControls() {
+  const stat = effectiveStatus();
+  const canAct = myColor && !stat.over && gameRow?.black_token;
+
+  const offerBtn = document.getElementById("offer-draw-btn");
+  const resignBtn = document.getElementById("resign-btn");
+  const isMyOffer = gameRow?.draw_offered_by === myColor;
+  offerBtn.style.display = canAct ? "" : "none";
+  offerBtn.disabled = isMyOffer;
+  offerBtn.textContent = isMyOffer ? "Draw offer sent…" : "Offer draw";
+  resignBtn.style.display = canAct ? "" : "none";
+
+  const offerCard = document.getElementById("draw-offer-card");
+  const opponentColor = myColor === "w" ? "b" : "w";
+  const theirOffer = canAct && gameRow?.draw_offered_by === opponentColor;
+  if (theirOffer) {
+    const opp = (myColor === "w" ? gameRow?.black_nickname : gameRow?.white_nickname) || "Your opponent";
+    document.getElementById("draw-offer-text").textContent = `${opp} offers a draw.`;
+    document.getElementById("draw-offer-actions").innerHTML = `<button class="btn" id="accept-draw-btn">Accept</button><button class="btn" id="decline-draw-btn">Decline</button>`;
+    document.getElementById("accept-draw-btn").onclick = () => respondToDraw({ gameId: roomId, myColor, myToken, accept: true });
+    document.getElementById("decline-draw-btn").onclick = () => respondToDraw({ gameId: roomId, myColor, myToken, accept: false });
+    offerCard.style.display = "";
+  } else {
+    offerCard.style.display = "none";
+  }
 }
 
 function renderBoard() {
@@ -455,7 +492,7 @@ function renderStatus() {
   const el = document.getElementById("status");
   if (stat.over) {
     const r = stat.result === "1/2-1/2" ? "Draw" : stat.result === "1-0" ? "White wins" : "Black wins";
-    const reason = stat.reason === "time" ? "on time" : stat.reason;
+    const reason = stat.reason === "timeout" ? "on time" : stat.reason;
     el.innerHTML = `<span class="result">${r} — ${reason}</span>`;
   } else if (animating) {
     el.innerHTML = '<span class="thinking">…</span>';
@@ -528,6 +565,11 @@ function choosePromo(from, to, type) {
   const m = legal().find((x) => x.from === from && x.to === to && x.promo === type);
   if (m) playMove(m, { local: true });
 }
+
+document.getElementById("resign-btn").onclick = () => {
+  if (confirm("Resign this game?")) resignGame({ gameId: roomId, myColor, myToken });
+};
+document.getElementById("offer-draw-btn").onclick = () => offerDraw({ gameId: roomId, myColor, myToken });
 
 // ═══════════════════════════════════════════════════════
 //  BOOT
