@@ -7,14 +7,27 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#232B24;color:#E9E4D4;font-family:Georgia,'Times New Roman',serif;min-height:100vh;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;text-align:center}
+  display:flex;flex-direction:column;align-items:center;padding:32px 16px;text-align:center}
 h1{font-size:32px;font-weight:normal;letter-spacing:.5px;margin-bottom:6px}
-.sub{font-size:13px;color:#9FAE9B;font-family:monospace;margin-bottom:28px}
-.stats{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
-.stat{background:#2B342C;border:1px solid #3C4A3D;border-radius:4px;padding:16px 22px;min-width:150px}
-.stat .n{font-size:30px;color:#D6B25E;font-family:monospace}
-.stat .l{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#9FAE9B;font-family:monospace;margin-top:4px}
-.note{margin-top:30px;font-size:13px;color:#9FAE9B}
+.sub{font-size:13px;color:#9FAE9B;font-family:monospace;margin-bottom:24px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;margin-bottom:28px}
+.stat{background:#2B342C;border:1px solid #3C4A3D;border-radius:4px;padding:12px 20px;min-width:130px}
+.stat .n{font-size:24px;color:#D6B25E;font-family:monospace}
+.stat .l{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#9FAE9B;font-family:monospace;margin-top:2px}
+.wrap{width:100%;max-width:380px;display:flex;flex-direction:column;gap:16px}
+.card{background:#2B342C;border:1px solid #3C4A3D;border-radius:4px;padding:16px 18px;text-align:left}
+.card h3{margin:0 0 10px;font-size:12px;font-weight:normal;letter-spacing:2px;text-transform:uppercase;color:#9FAE9B;font-family:monospace}
+input[type=text]{width:100%;background:#20261F;border:1px solid #3C4A3D;color:#E9E4D4;border-radius:3px;padding:8px 10px;font-family:inherit;font-size:15px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.btn{background:#3C4A3D;color:#E9E4D4;border:1px solid #55665A;border-radius:3px;padding:8px 14px;font-family:inherit;font-size:14px;cursor:pointer;flex:1}
+.btn:hover{background:#48584A}
+.btn.active{background:#D6B25E;color:#2A2412;border-color:#D6B25E}
+.btn.primary{background:#4A6B4C;border-color:#5F8562;width:100%;margin-top:12px;padding:10px}
+.btn.primary:hover{background:#557656}
+.btn:disabled{opacity:.5;cursor:default}
+a.btn{display:block;text-align:center;text-decoration:none}
+.searching{font-size:13px;color:#9FAE9B;font-style:italic;text-align:center;margin-top:10px}
+.note{margin-top:6px;font-size:12px;color:#9FAE9B;text-align:center}
 </style>
 </head>
 <body>
@@ -24,15 +37,93 @@ h1{font-size:32px;font-weight:normal;letter-spacing:.5px;margin-bottom:6px}
     <div class="stat"><div class="n" id="stat-games">–</div><div class="l">games in progress</div></div>
     <div class="stat"><div class="n" id="stat-players">–</div><div class="l">players active</div></div>
   </div>
-  <div class="note"><a href="game.html" style="color:#D6B25E">Start a game →</a></div>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Your name</h3>
+      <input type="text" id="nickname" maxlength="24"/>
+    </div>
+
+    <div class="card">
+      <h3>Play a random opponent</h3>
+      <div class="row" id="color-btns">
+        <button class="btn" data-color="w">White</button>
+        <button class="btn active" data-color="either">Either</button>
+        <button class="btn" data-color="b">Black</button>
+      </div>
+      <button class="btn primary" id="find-btn">Find opponent</button>
+      <div class="searching" id="searching" style="display:none">Searching for an opponent…</div>
+    </div>
+
+    <div class="card">
+      <h3>Play a friend</h3>
+      <a class="btn" href="game.html">Create a private room →</a>
+      <div class="note">Get an invite link to send them.</div>
+    </div>
+  </div>
 
 <script type="module">
-import { subscribeStats } from "./supabase-client.js";
+import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity } from "./supabase-client.js";
 
 subscribeStats((stats) => {
   document.getElementById("stat-games").textContent = stats.gamesOngoing;
   document.getElementById("stat-players").textContent = stats.playersEstimate;
 });
+
+const nickInput = document.getElementById("nickname");
+nickInput.value = getNickname();
+nickInput.addEventListener("change", () => setNickname(nickInput.value.trim() || getNickname()));
+
+let wantsColor = "either";
+document.querySelectorAll("#color-btns .btn").forEach((b) => {
+  b.onclick = () => {
+    wantsColor = b.dataset.color;
+    document.querySelectorAll("#color-btns .btn").forEach((x) => x.classList.toggle("active", x === b));
+  };
+});
+
+const findBtn = document.getElementById("find-btn");
+const searchingEl = document.getElementById("searching");
+let unsubscribe = null;
+let searching = false;
+
+function goToGame({ gameId, color, token }) {
+  saveIdentity(gameId, color, token);
+  location.href = `game.html?room=${gameId}`;
+}
+
+function setSearching(on) {
+  searching = on;
+  findBtn.textContent = on ? "Cancel search" : "Find opponent";
+  searchingEl.style.display = on ? "" : "none";
+}
+
+findBtn.onclick = async () => {
+  if (searching) {
+    if (unsubscribe) unsubscribe();
+    if (window.__lobbyId) cancelLobby(window.__lobbyId, window.__lobbyToken);
+    setSearching(false);
+    return;
+  }
+
+  findBtn.disabled = true;
+  try {
+    const result = await enterLobby(getNickname(), wantsColor);
+    if (result.matched) {
+      goToGame(result);
+      return;
+    }
+    window.__lobbyId = result.lobbyId;
+    window.__lobbyToken = result.token;
+    setSearching(true);
+    unsubscribe = subscribeLobby(result.lobbyId, result.token, goToGame);
+  } catch (e) {
+    alert("Couldn't reach matchmaking — check your connection and try again.");
+    console.error(e);
+  } finally {
+    findBtn.disabled = false;
+  }
+};
 </script>
 </body>
 </html>

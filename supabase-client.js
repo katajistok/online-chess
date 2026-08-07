@@ -20,6 +20,18 @@ function randomToken() {
   return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
+// Where a browser's own color/token for a room is stored, shared between
+// game.html (which reads it) and index.html (which writes it after a
+// matchmaking pairing, before redirecting into the game).
+function identityKey(gameId) { return `chess-online:${gameId}`; }
+export function saveIdentity(gameId, color, token) {
+  localStorage.setItem(identityKey(gameId), JSON.stringify({ color, token }));
+}
+export function loadIdentity(gameId) {
+  const raw = localStorage.getItem(identityKey(gameId));
+  return raw ? JSON.parse(raw) : null;
+}
+
 // Security model, spelled out: `games` rows are readable by anyone who has
 // the room id (the invite link), including the white/black token columns.
 // The token filters below stop *accidental* conflicts - two people clicking
@@ -60,11 +72,26 @@ export function subscribeStats(onChange) {
   return () => supabase.removeChannel(channel);
 }
 
+// Nickname is stored in the browser, not tied to any account - default is
+// a random "Player1234" the first time, editable afterwards.
+const NICK_KEY = "chess-online:nickname";
+export function getNickname() {
+  let nick = localStorage.getItem(NICK_KEY);
+  if (!nick) {
+    nick = "Player" + Math.floor(1000 + Math.random() * 9000);
+    localStorage.setItem(NICK_KEY, nick);
+  }
+  return nick;
+}
+export function setNickname(nick) {
+  localStorage.setItem(NICK_KEY, nick);
+}
+
 // Creates a new room, seeded with the standard starting position. The
 // creator is always white. Returns the token their browser should keep
 // (e.g. in localStorage) to prove they're allowed to move white's pieces.
-export async function createRoom() {
-  const { data, error } = await supabase.from("games").insert({ state: initialState() }).select().single();
+export async function createRoom(nickname) {
+  const { data, error } = await supabase.from("games").insert({ state: initialState(), white_nickname: nickname }).select().single();
   if (error) throw error;
   logEvent("room_created", data.id);
   return { gameId: data.id, color: "w", token: data.white_token };
@@ -74,11 +101,11 @@ export async function createRoom() {
 // update (`black_token is null`) so that if two people click "join" at the
 // same moment, only one of them actually wins the seat - the other gets
 // joined:false and can fall back to spectating.
-export async function joinRoom(gameId) {
+export async function joinRoom(gameId, nickname) {
   const token = randomToken();
   const { data, error } = await supabase
     .from("games")
-    .update({ black_token: token, status: "active" })
+    .update({ black_token: token, black_nickname: nickname, status: "active" })
     .eq("id", gameId)
     .is("black_token", null)
     .select()
@@ -90,6 +117,44 @@ export async function joinRoom(gameId) {
   }
   logEvent("player_joined", gameId);
   return { joined: true, gameId: data.id, color: "b", token, game: data };
+}
+
+// Random-opponent matchmaking. Generates this browser's own move-token
+// up front (same token used later in the matched game) and asks the
+// server to either pair it with someone already waiting, or register it
+// as the new waiting entry. See supabase/004_lobby.sql for the atomic
+// pairing logic - this just calls it.
+export async function enterLobby(nickname, wantsColor) {
+  const token = randomToken();
+  const { data, error } = await supabase.rpc("match_lobby", { p_nickname: nickname, p_wants_color: wantsColor, p_token: token });
+  if (error) throw error;
+  const row = data[0];
+  logEvent("lobby_entered");
+  if (row.matched) {
+    logEvent("lobby_matched", row.game_id);
+    return { matched: true, gameId: row.game_id, color: row.color, token };
+  }
+  return { matched: false, lobbyId: row.lobby_id, token };
+}
+
+// Waits for a lobby entry to be matched by someone else joining later.
+// Calls onMatched({ gameId, color, token }) once, then auto-unsubscribes.
+export function subscribeLobby(lobbyId, token, onMatched) {
+  const channel = supabase
+    .channel(`lobby-${lobbyId}`)
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "lobby", filter: `id=eq.${lobbyId}` }, (payload) => {
+      if (payload.new.status === "matched") {
+        onMatched({ gameId: payload.new.matched_game_id, color: payload.new.matched_color, token });
+        supabase.removeChannel(channel);
+      }
+    })
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+// Gives up waiting in the lobby (e.g. user navigates away or clicks cancel).
+export async function cancelLobby(lobbyId, token) {
+  await supabase.from("lobby").update({ status: "cancelled" }).eq("id", lobbyId).eq("token", token).eq("status", "waiting");
 }
 
 // Fetches the current row for a room - used on initial load / reconnect.

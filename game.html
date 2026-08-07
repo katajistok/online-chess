@@ -109,7 +109,7 @@ h1{font-size:26px;letter-spacing:.5px;font-weight:normal}
 
 <script type="module">
 import { legalMoves, applyMove, gameStatus, toSAN, rowOf, colOf, findKing, inCheck, initialState } from "./rules.js";
-import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame } from "./supabase-client.js";
+import { createRoom, joinRoom, getGame, getMoves, sendMove, subscribeGame, getNickname, saveIdentity, loadIdentity } from "./supabase-client.js";
 
 // ═══════════════════════════════════════════════════════
 //  ROOM / IDENTITY
@@ -119,23 +119,21 @@ let myColor = null;   // 'w' | 'b' | null (spectator)
 let myToken = null;
 let gameRow = null;   // last known `games` row (status, result, tokens, etc.)
 
-function storageKey(id) { return `chess-online:${id}`; }
-
 async function bootstrap() {
   if (!roomId) {
-    const room = await createRoom();
+    const room = await createRoom(getNickname());
     roomId = room.gameId; myColor = "w"; myToken = room.token;
-    localStorage.setItem(storageKey(roomId), JSON.stringify({ color: myColor, token: myToken }));
+    saveIdentity(roomId, myColor, myToken);
     window.history.replaceState(null, "", `?room=${roomId}`);
   } else {
-    const saved = localStorage.getItem(storageKey(roomId));
+    const saved = loadIdentity(roomId);
     if (saved) {
-      ({ color: myColor, token: myToken } = JSON.parse(saved));
+      ({ color: myColor, token: myToken } = saved);
     } else {
-      const result = await joinRoom(roomId);
+      const result = await joinRoom(roomId, getNickname());
       if (result.joined) {
         myColor = result.color; myToken = result.token;
-        localStorage.setItem(storageKey(roomId), JSON.stringify({ color: myColor, token: myToken }));
+        saveIdentity(roomId, myColor, myToken);
       } else if (result.reason === "full") {
         myColor = null; // spectator
       } else {
@@ -147,7 +145,7 @@ async function bootstrap() {
   }
 
   document.getElementById("you-are").textContent =
-    myColor === "w" ? "you are white" : myColor === "b" ? "you are black" : "spectating";
+    myColor === "w" ? `${getNickname()} — you are white` : myColor === "b" ? `${getNickname()} — you are black` : "spectating";
 
   await syncFromServer();
   subscribeGame(roomId, onGameRowChange, onMoveInserted);
@@ -384,7 +382,8 @@ function renderStatus() {
   } else if (!myColor) {
     el.textContent = (s.turn === "w" ? "White" : "Black") + " to move — spectating";
   } else if (s.turn !== myColor) {
-    el.innerHTML = '<span class="thinking">Waiting for opponent’s move…</span>';
+    const opp = (myColor === "w" ? gameRow?.black_nickname : gameRow?.white_nickname) || "your opponent";
+    el.innerHTML = `<span class="thinking">Waiting for ${opp}’s move…</span>`;
   } else {
     const chk = inCheck(s, s.turn) ? " — check!" : "";
     el.textContent = "Your move" + chk;
