@@ -27,6 +27,10 @@ single-player-vs-computer version.
   presentation as `simple-chess`.
 - **Resign / offer a draw** — for when a game doesn't need to go to
   checkmate.
+- **Watch a game** — no registration needed. Browse ongoing games from
+  the lobby, or a player can copy a game's "Share to watch" link straight
+  to a friend. Both players see a live count of how many people are
+  watching.
 - **Nicknames** — pick your own, or a random one is assigned.
 - **Elo rating & leaderboard** — register a persistent name (see below)
   and your rating updates automatically after every rated game. Works
@@ -57,6 +61,11 @@ single-player-vs-computer version.
    nothing to click, it's detected and applied for you.
 6. *Resign* or *Offer draw* buttons are in the Game panel once your
    opponent has joined, if you'd rather not play to checkmate.
+
+Anyone can watch a game once both seats are filled — either pick it from
+"Watch a game" on the lobby page, or open a link a player copied for you
+from their own game screen. Watching needs no name, no registration, and
+nothing to click; you just see moves arrive live.
 
 Ratings are separate from casual play: only games where **both** players
 registered an account (see [AGENT.md](AGENT.md) for how — it's simple
@@ -114,6 +123,11 @@ Design notes worth knowing if you're reading the code:
   a Supabase Edge Function (`supabase/functions/submit-move`) replays the
   whole game from its own record and rejects anything illegal. Clients
   can't write `games.state` or `moves` any other way — see `AGENT.md`.
+- **Move tokens aren't broadcast to spectators.** `white_token`/
+  `black_token` are excluded from `games`' Realtime publication (see
+  `supabase/014_lock_down_tokens.sql`), so a game being watched by
+  strangers via the public directory doesn't hand them either player's
+  move-authorization credential just by having the page open.
 - **Everything reruns through `rules.js`.** The same move-generation/SAN
   code powers the offline `simple-chess` game, this online version, the
   reference bot, and (indirectly) Elo scoring — one engine, several
