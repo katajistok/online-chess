@@ -83,6 +83,7 @@ h1 a{color:inherit;text-decoration:none}
   <header>
     <h1><a href="index.html">Online Chess</a></h1>
     <span class="sub" id="you-are">connecting…</span>
+    <span class="sub" id="observer-count" style="display:none"></span>
     <span class="nav"><a href="index.html">← Lobby</a> · <a href="leaderboard.html">Leaderboard</a></span>
   </header>
   <div class="main">
@@ -100,8 +101,9 @@ h1 a{color:inherit;text-decoration:none}
     </div>
     <div class="panel">
       <div class="card" id="invite-card" style="display:none">
-        <h3>Invite a friend</h3>
+        <h3 id="invite-title">Invite a friend</h3>
         <div class="invite" id="invite-link"></div>
+        <button class="btn" id="copy-link-btn" style="margin-top:8px;display:none">Copy link</button>
       </div>
       <div class="card" id="draw-offer-card" style="display:none">
         <h3>Draw offer</h3>
@@ -165,18 +167,53 @@ async function bootstrap() {
     myColor === "w" ? `${getNickname()} — you are white` : myColor === "b" ? `${getNickname()} — you are black` : "spectating";
 
   await syncFromServer();
-  subscribeGame(roomId, onGameRowChange, onMoveInserted);
+  subscribeGame(roomId, myColor, onGameRowChange, onMoveInserted, onObserverCountChange);
 }
 
+function onObserverCountChange(count) {
+  const el = document.getElementById("observer-count");
+  el.style.display = count > 0 ? "" : "none";
+  el.textContent = `👁 ${count} watching`;
+}
+
+// Two states, based on gameRow.status rather than the black_token column
+// (getGame() no longer even fetches that column - see GAME_PUBLIC_COLUMNS
+// in supabase-client.js - and status already carries the same "has an
+// opponent joined" signal, set to 'active' the moment they do):
+//  - 'waiting': white only, invite someone to fill the empty seat.
+//  - otherwise: both players, for the rest of the game, a link anyone can
+//    use to watch (game.html's own spectator fallback handles the rest).
 function updateInviteUI() {
   const card = document.getElementById("invite-card");
-  if (myColor === "w" && gameRow && !gameRow.black_token) {
+  const copyBtn = document.getElementById("copy-link-btn");
+  if (!myColor || !gameRow) { card.style.display = "none"; return; }
+
+  if (gameRow.status === "waiting" && myColor === "w") {
     card.style.display = "";
+    document.getElementById("invite-title").textContent = "Invite a friend";
     document.getElementById("invite-link").textContent = location.href;
+    copyBtn.style.display = "none";
+  } else if (gameRow.status !== "waiting") {
+    card.style.display = "";
+    document.getElementById("invite-title").textContent = "Share to watch";
+    document.getElementById("invite-link").textContent = location.href;
+    copyBtn.style.display = "";
+    copyBtn.textContent = "Copy link";
   } else {
     card.style.display = "none";
   }
 }
+
+document.getElementById("copy-link-btn").onclick = async () => {
+  const btn = document.getElementById("copy-link-btn");
+  try {
+    await navigator.clipboard.writeText(location.href);
+    btn.textContent = "Copied!";
+  } catch {
+    btn.textContent = "Couldn't copy — select and copy manually";
+  }
+  setTimeout(() => { btn.textContent = "Copy link"; }, 2000);
+};
 
 // ═══════════════════════════════════════════════════════
 //  LOCAL GAME STATE (mirrors chess.html, driven by server moves)
@@ -414,7 +451,7 @@ function render() {
 
 function renderGameControls() {
   const stat = effectiveStatus();
-  const canAct = myColor && !stat.over && gameRow?.black_token;
+  const canAct = myColor && !stat.over && gameRow?.status !== "waiting";
 
   const offerBtn = document.getElementById("offer-draw-btn");
   const resignBtn = document.getElementById("resign-btn");
@@ -494,7 +531,7 @@ function renderStatus() {
     el.innerHTML = `<span class="result">${r} — ${reason}</span>`;
   } else if (animating) {
     el.innerHTML = '<span class="thinking">…</span>';
-  } else if (myColor && !gameRow?.black_token) {
+  } else if (myColor && gameRow?.status === "waiting") {
     el.innerHTML = '<span class="thinking">Waiting for an opponent to join — share the invite link.</span>';
   } else if (!myColor) {
     el.textContent = (s.turn === "w" ? "White" : "Black") + " to move — spectating";

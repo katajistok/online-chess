@@ -160,15 +160,16 @@ export async function createRoom(nickname, timeLimitSeconds = 180) {
     return { gameId: row.game_id, color: row.color, token: row.token };
   }
 
-  const insert = { state: initialState(), white_nickname: nickname, time_limit_seconds: timeLimitSeconds };
+  const token = randomToken();
+  const insert = { state: initialState(), white_nickname: nickname, white_token: token, time_limit_seconds: timeLimitSeconds };
   if (timeLimitSeconds != null) {
     insert.white_time_remaining_ms = timeLimitSeconds * 1000;
     insert.black_time_remaining_ms = timeLimitSeconds * 1000;
   }
-  const { data, error } = await supabase.from("games").insert(insert).select().single();
+  const { data, error } = await supabase.from("games").insert(insert).select("id").single();
   if (error) throw error;
   logEvent("room_created", data.id);
-  return { gameId: data.id, color: "w", token: data.white_token };
+  return { gameId: data.id, color: "w", token };
 }
 
 // Attempts to claim the black seat in an existing room. Uses a conditional
@@ -197,7 +198,7 @@ export async function joinRoom(gameId, nickname) {
     .update({ black_token: token, black_nickname: nickname, status: "active", turn_started_at: new Date().toISOString() })
     .eq("id", gameId)
     .is("black_token", null)
-    .select()
+    .select("id")
     .single();
 
   if (error) {
@@ -205,7 +206,7 @@ export async function joinRoom(gameId, nickname) {
     return { joined: false, reason: existing ? "full" : "not_found" };
   }
   logEvent("player_joined", gameId);
-  return { joined: true, gameId: data.id, color: "b", token, game: data };
+  return { joined: true, gameId: data.id, color: "b", token };
 }
 
 // Random-opponent matchmaking. Generates this browser's own move-token
@@ -250,8 +251,21 @@ export async function cancelLobby(lobbyId, token) {
 }
 
 // Fetches the current row for a room - used on initial load / reconnect.
+// Explicit column list, deliberately excluding white_token/black_token -
+// nothing here ever needs to read a token back (each browser already
+// holds its own from the moment it was generated, create/join time, never
+// from re-querying the row), so there's no reason for the app's own reads
+// to ever request them. This is app-level hygiene, not an enforced
+// boundary - anon still has table-level SELECT on those columns at the
+// database level (see supabase/014_lock_down_tokens.sql for why), so a
+// deliberate raw REST call could still read them for a specific game.
+const GAME_PUBLIC_COLUMNS =
+  "id, status, state, result, end_reason, draw_offered_by, white_nickname, black_nickname, " +
+  "time_limit_seconds, white_time_remaining_ms, black_time_remaining_ms, turn_started_at, " +
+  "white_player_id, black_player_id, created_at, updated_at";
+
 export async function getGame(gameId) {
-  const { data, error } = await supabase.from("games").select("*").eq("id", gameId).maybeSingle();
+  const { data, error } = await supabase.from("games").select(GAME_PUBLIC_COLUMNS).eq("id", gameId).maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -298,7 +312,7 @@ export async function claimTimeout({ gameId, myColor, myToken, loserColor }) {
     .eq("id", gameId)
     .eq(tokenColumn, myToken)
     .eq("status", "active")
-    .select()
+    .select("id")
     .maybeSingle();
   if (error || !data) return null;
   logEvent("game_finished", gameId);
@@ -315,7 +329,7 @@ export async function resignGame({ gameId, myColor, myToken }) {
     .eq("id", gameId)
     .eq(tokenColumn, myToken)
     .eq("status", "active")
-    .select()
+    .select("id")
     .maybeSingle();
   if (error || !data) return null;
   logEvent("game_finished", gameId);
@@ -351,7 +365,7 @@ export async function respondToDraw({ gameId, myColor, myToken, accept }) {
     .eq("id", gameId)
     .eq(tokenColumn, myToken)
     .eq("draw_offered_by", opponentColor)
-    .select()
+    .select("id")
     .maybeSingle();
   if (error) throw error;
   if (accept && data) logEvent("game_finished", gameId);
@@ -359,12 +373,53 @@ export async function respondToDraw({ gameId, myColor, myToken, accept }) {
 }
 
 // Subscribes to both the game row (board state) and new rows in `moves`
-// (scoresheet) for one room. Returns an unsubscribe function.
-export function subscribeGame(gameId, onGameChange, onMove) {
+// (scoresheet) for one room, plus a live observer count via Realtime
+// Presence on the same channel - no schema change, cleans up on its own
+// when a tab closes. Only spectators (myColor falsy) actually track
+// themselves; players just listen, so no role-tagging is needed to tell
+// "players" apart from "observers" in the presence state.
+// Returns an unsubscribe function.
+export function subscribeGame(gameId, myColor, onGameChange, onMove, onObserverCountChange) {
   const channel = supabase
     .channel(`game-${gameId}`)
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${gameId}` }, (payload) => onGameChange(payload.new))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "moves", filter: `game_id=eq.${gameId}` }, (payload) => onMove?.(payload.new))
+    .on("presence", { event: "sync" }, () => {
+      onObserverCountChange?.(Object.keys(channel.presenceState()).length);
+    })
+    .subscribe(async (status) => {
+      if (status === "SUBSCRIBED" && !myColor) await channel.track({ joined_at: Date.now() });
+    });
+  return () => supabase.removeChannel(channel);
+}
+
+// Active (both seats filled), recently-updated games - what the lobby's
+// "watch a game" directory lists. Deliberately excludes 'waiting' rooms:
+// their one open seat is a player seat, so a spectator clicking in would
+// hit the same joinRoom() path a real second player uses and silently
+// become black instead of spectating - keeping them off the directory is
+// the only place that distinction can be enforced.
+export async function fetchActiveGames(limit = 20) {
+  const cutoff = new Date(Date.now() - STALE_AFTER_MS).toISOString();
+  const { data, error } = await supabase
+    .from("games")
+    .select("id, white_nickname, black_nickname, time_limit_seconds, updated_at")
+    .eq("status", "active")
+    .gte("updated_at", cutoff)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data;
+}
+
+// Calls onChange immediately with the current list, then again on every
+// insert/update/delete to `games`. Returns an unsubscribe function.
+export function subscribeActiveGames(onChange) {
+  const refresh = () => fetchActiveGames().then(onChange);
+  refresh();
+  const channel = supabase
+    .channel("games-directory")
+    .on("postgres_changes", { event: "*", schema: "public", table: "games" }, refresh)
     .subscribe();
   return () => supabase.removeChannel(channel);
 }

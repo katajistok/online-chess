@@ -94,10 +94,15 @@ a.btn{display:block;text-align:center;text-decoration:none}
       <button class="btn primary" id="create-btn">Create a private room →</button>
       <div class="note">Get an invite link to send them.</div>
     </div>
+
+    <div class="card" id="watch-card" style="display:none">
+      <h3>Watch a game</h3>
+      <div id="watch-list"></div>
+    </div>
   </div>
 
 <script type="module">
-import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom, fetchLeaderboard, getStoredPlayer, registerAsPlayer, fetchMyPlayerStats, signInWithKey } from "./supabase-client.js";
+import { subscribeStats, getNickname, setNickname, enterLobby, subscribeLobby, cancelLobby, saveIdentity, createRoom, fetchLeaderboard, getStoredPlayer, registerAsPlayer, fetchMyPlayerStats, signInWithKey, subscribeActiveGames } from "./supabase-client.js";
 
 subscribeStats((stats) => {
   document.getElementById("stat-games").textContent = stats.gamesOngoing;
@@ -115,6 +120,24 @@ fetchLeaderboard(5).then((top) => {
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+// Only lists status='active' games (both seats filled) - see
+// fetchActiveGames in supabase-client.js for why 'waiting' rooms are
+// deliberately excluded (clicking one would seat you as black, not
+// spectate it).
+function formatTimeControl(sec) {
+  return sec == null ? "no limit" : `${Math.round(sec / 60)} min`;
+}
+
+function renderWatchList(games) {
+  const card = document.getElementById("watch-card");
+  if (!games.length) { card.style.display = "none"; return; }
+  card.style.display = "";
+  document.getElementById("watch-list").innerHTML = games
+    .map((g) => `<div class="lb-row"><span class="lb-name">${escapeHtml(g.white_nickname || "White")} vs ${escapeHtml(g.black_nickname || "Black")} · ${formatTimeControl(g.time_limit_seconds)}</span><a class="lb-rating" href="game.html?room=${g.id}">Watch →</a></div>`)
+    .join("");
+}
+subscribeActiveGames(renderWatchList);
 
 const nickInput = document.getElementById("nickname");
 nickInput.value = getNickname();
